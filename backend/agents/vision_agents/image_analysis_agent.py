@@ -4,7 +4,7 @@ from PIL import Image as PILImage
 from dotenv import load_dotenv
 from langchain_core.output_parsers import StrOutputParser
 from langchain_groq import ChatGroq
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 
 
 load_dotenv()

@@ -6,8 +6,8 @@ from functools import lru_cache
 
 from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
-from langchain.schema.messages import SystemMessage
+from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
+from langchain_core.messages import SystemMessage
 from dotenv import load_dotenv
 
 from agents.llm_loader import get_embedding_model as get_shared_embedding_model
@@ -31,22 +31,49 @@ def get_llm(role: str = "default"):
     
     system_prompts = {
         "default": "You are a helpful assistant.",
-        "planner": """You are a query planning expert. Analyze user queries to:
-            1. Identify key concepts and relationships
-            2. Break down complex queries into sub-queries
-            3. Determine required information types
-            4. Plan the retrieval strategy""",
-        "validator": """You are a fact-checking expert. Your role is to:
-            1. Verify response accuracy against source documents
-            2. Identify unsupported claims
-            3. Ensure response completeness
-            4. Suggest improvements""",
-        "expander": """You are a query expansion expert. Your role is to:
-            1. Identify key concepts in user queries
-            2. Add relevant domain-specific terminology
-            3. Include synonyms and related terms
-            4. Maintain query intent and context""",
-        "query_rewriter": "Rewrite follow-up questions into a standalone query without changing meaning.",
+        "rag_answerer": (
+            "You are a precise document analyst. Your job is to answer user questions strictly and completely from the retrieved document evidence provided.\n\n"
+            "Rules you must follow:\n"
+            "1. Use ONLY facts present in the <context> — never add outside knowledge or assumptions.\n"
+            "2. When the context contains the answer, give a COMPLETE and DETAILED response — include all relevant numbers, dates, conditions, limits, thresholds, and exceptions found in the source text.\n"
+            "3. When the context does not contain enough information to answer, reply with exactly the word INSUFFICIENT_INFORMATION and nothing else.\n"
+            "4. Structure multi-part answers with markdown headings (##) and bullet points.\n"
+            "5. Reproduce tables from the context as markdown tables — never flatten tabular data into prose.\n"
+            "6. Never invent source links. Only cite sources explicitly shown in the context.\n"
+            "7. Prefer precision over brevity — a complete answer is better than a short one."
+        ),
+        "planner": (
+            "You are a query planning expert. Analyze user queries to:\n"
+            "1. Identify key concepts and relationships\n"
+            "2. Break down complex queries into sub-queries\n"
+            "3. Determine required information types\n"
+            "4. Plan the retrieval strategy"
+        ),
+        "validator": (
+            "You are a fact-checking expert. Your role is to:\n"
+            "1. Verify response accuracy against source documents\n"
+            "2. Identify unsupported claims\n"
+            "3. Ensure response completeness\n"
+            "4. Suggest improvements"
+        ),
+        "expander": (
+            "You are a query expansion expert. Your role is to:\n"
+            "1. Identify key concepts in user queries\n"
+            "2. Add relevant domain-specific terminology\n"
+            "3. Include synonyms and related terms\n"
+            "4. Maintain query intent and context"
+        ),
+        "multi_query": (
+            "You are a retrieval query optimizer. Produce a few short search variants that preserve the user's meaning while improving retrieval recall.\n"
+            "1. Keep each variant focused and concrete\n"
+            "2. Split compound requests into separate targeted search queries when helpful\n"
+            "3. Do not invent facts or add new requirements\n"
+            "4. Return only retrieval-friendly variants, not final answers"
+        ),
+        "query_rewriter": (
+            "You are a query rewriter. Convert follow-up questions into fully self-contained questions by resolving any references to prior conversation. "
+            "Do not change the meaning. Return only the rewritten question, nothing else."
+        ),
     }
     
     llm = get_base_llm(model_name=model_name)

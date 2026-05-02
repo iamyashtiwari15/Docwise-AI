@@ -1,9 +1,12 @@
 from io import BytesIO
 from pathlib import Path
+import re
 from typing import Dict, List
 
 from PyPDF2 import PdfReader
 from docx import Document as DocxDocument
+
+from core.config import get_settings
 
 
 SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".txt"}
@@ -49,24 +52,123 @@ def extract_text_from_upload(filename: str, file_bytes: bytes, content_type: str
     raise ValueError("Unsupported document type. Please upload a PDF, DOCX, or TXT file.")
 
 
-def chunk_document_text(text: str, source_name: str, chunk_size: int = 900, overlap: int = 150) -> List[Dict]:
-    normalized_text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
+def _normalize_document_text(text: str) -> str:
+    lines = []
+    for raw_line in text.splitlines():
+        cleaned_line = re.sub(r"\s+", " ", raw_line).strip()
+        lines.append(cleaned_line)
+
+    normalized = "\n".join(lines)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized.strip()
+
+
+def _split_long_unit(unit: str, max_length: int) -> List[str]:
+    stripped = re.sub(r"\s+", " ", unit).strip()
+    if not stripped:
+        return []
+    if len(stripped) <= max_length:
+        return [stripped]
+
+    sentences = re.split(r"(?<=[.!?])\s+", stripped)
+    if len(sentences) <= 1:
+        words = stripped.split()
+        pieces: List[str] = []
+        current_words: List[str] = []
+        current_length = 0
+
+        for word in words:
+            projected = current_length + len(word) + (1 if current_words else 0)
+            if current_words and projected > max_length:
+                pieces.append(" ".join(current_words))
+                current_words = [word]
+                current_length = len(word)
+                continue
+
+            current_words.append(word)
+            current_length = projected
+
+        if current_words:
+            pieces.append(" ".join(current_words))
+        return pieces
+
+    pieces: List[str] = []
+    current_parts: List[str] = []
+    current_length = 0
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+
+        if len(sentence) > max_length:
+            if current_parts:
+                pieces.append(" ".join(current_parts).strip())
+                current_parts = []
+                current_length = 0
+            pieces.extend(_split_long_unit(sentence, max_length))
+            continue
+
+        projected = current_length + len(sentence) + (1 if current_parts else 0)
+        if current_parts and projected > max_length:
+            pieces.append(" ".join(current_parts).strip())
+            current_parts = [sentence]
+            current_length = len(sentence)
+            continue
+
+        current_parts.append(sentence)
+        current_length = projected
+
+    if current_parts:
+        pieces.append(" ".join(current_parts).strip())
+
+    return pieces
+
+
+def _build_overlap_units(units: List[str], overlap: int) -> List[str]:
+    if overlap <= 0 or not units:
+        return []
+
+    retained: List[str] = []
+    retained_length = 0
+    for unit in reversed(units):
+        additional_length = len(unit) + (1 if retained else 0)
+        if retained and retained_length + additional_length > overlap:
+            break
+        retained.insert(0, unit)
+        retained_length += additional_length
+
+    return retained
+
+
+def chunk_document_text(text: str, source_name: str, chunk_size: int | None = None, overlap: int | None = None) -> List[Dict]:
+    settings = get_settings()
+    resolved_chunk_size = chunk_size or settings.document_chunk_size
+    resolved_overlap = overlap if overlap is not None else settings.document_chunk_overlap
+
+    normalized_text = _normalize_document_text(text)
     if not normalized_text:
         return []
 
-    paragraphs = normalized_text.split("\n")
+    paragraph_blocks = [block.strip() for block in re.split(r"\n\s*\n", normalized_text) if block.strip()]
+    if not paragraph_blocks:
+        paragraph_blocks = [line.strip() for line in normalized_text.splitlines() if line.strip()]
+
+    units: List[str] = []
+    for block in paragraph_blocks:
+        units.extend(_split_long_unit(block, resolved_chunk_size))
+
+    if not units:
+        return []
+
     chunks: List[Dict] = []
-    current_parts: List[str] = []
+    current_units: List[str] = []
     current_length = 0
     chunk_index = 1
 
-    for paragraph in paragraphs:
-        paragraph = paragraph.strip()
-        if not paragraph:
-            continue
-
-        if current_parts and current_length + len(paragraph) > chunk_size:
-            chunk_text = "\n".join(current_parts).strip()
+    for unit in units:
+        projected = current_length + len(unit) + (1 if current_units else 0)
+        if current_units and projected > resolved_chunk_size:
+            chunk_text = "\n".join(current_units).strip()
             chunks.append(
                 {
                     "content": chunk_text,
@@ -79,18 +181,22 @@ def chunk_document_text(text: str, source_name: str, chunk_size: int = 900, over
             )
             chunk_index += 1
 
-            overlap_text = chunk_text[-overlap:] if overlap > 0 else ""
-            current_parts = [overlap_text, paragraph] if overlap_text else [paragraph]
-            current_length = sum(len(part) for part in current_parts)
-            continue
+            overlap_units = _build_overlap_units(current_units, resolved_overlap)
+            current_units = list(overlap_units)
+            current_length = sum(len(part) for part in current_units) + max(len(current_units) - 1, 0)
 
-        current_parts.append(paragraph)
-        current_length += len(paragraph)
+        projected = current_length + len(unit) + (1 if current_units else 0)
+        if current_units and projected > resolved_chunk_size:
+            current_units = []
+            current_length = 0
 
-    if current_parts:
+        current_units.append(unit)
+        current_length += len(unit) + (1 if len(current_units) > 1 else 0)
+
+    if current_units:
         chunks.append(
             {
-                "content": "\n".join(current_parts).strip(),
+                "content": "\n".join(current_units).strip(),
                 "metadata": {
                     "source": source_name,
                     "source_path": source_name,

@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 import uuid
 from agents.vision_agents.image_analysis_agent import analyze_image
 from typing import TypedDict, Literal, Optional, List, Dict
@@ -9,7 +10,7 @@ from agents.llm_loader import get_llm
 from agents.workflow_manager import WorkflowManager
 from agents.guardrails import LocalGuardrails
 
-logging.basicConfig(level=logging.INFO) # Use INFO for cleaner production logs
+logger = logging.getLogger(__name__)
 llm = get_llm()
 manager = WorkflowManager("agents/rag_agent/rag_db")
 guard = LocalGuardrails(llm)
@@ -30,9 +31,11 @@ class GraphState(TypedDict):
 
 def guardrails_node(state: GraphState):
     if state["input_type"] != "text":
+        logger.debug("[GUARDRAILS] Skipped (non-text input)")
         return {**state, "bypass_guardrails": True}
     is_safe, result = guard.check_input(state["input"])
     if not is_safe:
+        logger.warning("[GUARDRAILS] Blocked | session=%s | input=%.60r", state.get("session_id"), state["input"])
         return {
             **state,
             "bypass_guardrails": False,
@@ -41,14 +44,15 @@ def guardrails_node(state: GraphState):
             "involved_agents": state.get("involved_agents", []) + ["GUARDRAILS_BLOCK"],
             "messages": state.get("messages", []) + [AIMessage(content=result.content)],
         }
+    logger.debug("[GUARDRAILS] Passed | session=%s", state.get("session_id"))
     return {**state, "bypass_guardrails": True}
 
 def image_detection_router(state: GraphState):
     if state.get("image"):
-        logging.info("Image detected. Routing to ImageAnalysis.")
+        logger.info("[GRAPH] Image detected → routing to ImageAnalysis")
         return "handle_image"
     else:
-        logging.info("No image detected. Routing directly to ContextMerger.")
+        logger.info("[GRAPH] No image → routing directly to ContextMerger")
         return "handle_text_only"
 
 def image_analysis_node(state: GraphState):
@@ -57,19 +61,25 @@ def image_analysis_node(state: GraphState):
         return state
 
     temp_filename = f"temp_{uuid.uuid4().hex}.png"
+    t0 = time.perf_counter()
     try:
         with open(temp_filename, "wb") as f:
             f.write(image_bytes)
         result = analyze_image(temp_filename)
-        
+        latency_ms = (time.perf_counter() - t0) * 1000
+
         image_context = result.get("ocr_summary") or result.get("ocr_text")
         if "❌" in (image_context or ""):
-             logging.warning(f"Image analysis returned an error: {image_context}")
+            logger.warning("[IMAGE] Analysis returned error | latency=%.0fms | result=%s", latency_ms, image_context)
         elif not image_context:
             image_context = "No relevant text was found in the image."
+            logger.info("[IMAGE] Analysis completed — no text found | latency=%.0fms", latency_ms)
+        else:
+            logger.info("[IMAGE] Analysis completed | text_len=%d | latency=%.0fms", len(image_context), latency_ms)
 
     except Exception as e:
-        logging.error(f"Image analysis failed critically: {e}")
+        latency_ms = (time.perf_counter() - t0) * 1000
+        logger.error("[IMAGE] Analysis failed critically | latency=%.0fms | error=%s", latency_ms, e)
         image_context = "❌ Error: The image file could not be processed."
     finally:
         if os.path.exists(temp_filename):
@@ -91,7 +101,7 @@ def context_merger_node(state: GraphState):
 def route_to_agent(state: GraphState):
     if state.get("agent_name") == "GUARDRAILS_BLOCK":
         return state
-        
+
     chat_history = state.get("chat_history", None)
     image_context = state.get("image_context", None)
     result = manager.process_query(
@@ -100,27 +110,32 @@ def route_to_agent(state: GraphState):
         image_context=image_context,
         session_id=state.get("session_id"),
     )
-    
-    if result.get("query_type") == "general":
+
+    query_type = result.get("query_type", "unknown")
+    if query_type == "general":
         agent_name = "CONVERSATION_AGENT"
+    elif query_type == "web":
+        agent_name = "WEB_AGENT"
     else:
         agent_name = "DOCUMENT_AGENT"
-        
-    logging.info(f"WorkflowManager selected agent: {agent_name}")
+
+    logger.info("[GRAPH] Agent selected → %s | query_type=%s | session=%s", agent_name, query_type, state.get("session_id"))
     return {**state, "agent_name": agent_name, "workflow_response": result}
 
 def call_agent(state: GraphState):
     if state.get("agent_name") == "GUARDRAILS_BLOCK":
+        logger.debug("[CALL_AGENT] Skipped — guardrails blocked")
         return state
 
     workflow_response = state.get("workflow_response", {})
     agent_name = state.get("agent_name")
     image_context = state.get("image_context", "")
 
-    # Route greeting/chitchat to general chat agent
     if agent_name == "CONVERSATION_AGENT":
         from agents.general_chat_agent import get_general_chat_response
+        t0 = time.perf_counter()
         ai_message = get_general_chat_response(state["messages"])
+        logger.info("[CALL_AGENT] CONVERSATION_AGENT responded | latency=%.0fms", (time.perf_counter() - t0) * 1000)
         workflow_response["response"] = ai_message.content
         updated_agents = state.get("involved_agents", []) + [agent_name]
         messages = state["messages"] + [ai_message]
@@ -135,6 +150,7 @@ def call_agent(state: GraphState):
         original_response = workflow_response.get("response", "I was unable to provide a response.")
         workflow_response["response"] = f"{image_context}\n\nRegarding your text query: {original_response}"
 
+    logger.info("[CALL_AGENT] %s completed | session=%s", agent_name, state.get("session_id"))
     messages = state["messages"] + [AIMessage(content=workflow_response.get("response", ""))]
     updated_agents = state.get("involved_agents", []) + [agent_name]
 

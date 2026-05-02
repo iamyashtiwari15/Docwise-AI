@@ -64,6 +64,15 @@ Optional env vars:
 | `SESSION_MAX_MESSAGES` | `30` | Max messages per session |
 | `DOCUMENT_RELEVANCE_THRESHOLD` | `0.35` | Min cosine similarity to use doc answer |
 | `WEB_SEARCH_MAX_RESULTS` | `3` | Tavily results per search |
+| `RAG_TOP_K` | `4` | Final number of document chunks passed to generation |
+| `RAG_CANDIDATE_K` | `8` | Retrieval candidate pool size before reranking |
+| `RAG_MAX_QUERY_VARIANTS` | `3` | Max multi-query variants per request |
+| `DOCUMENT_CHUNK_SIZE` | `900` | Target chunk size for uploaded documents |
+| `DOCUMENT_CHUNK_OVERLAP` | `150` | Overlap budget when building document chunks |
+| `ENABLE_MULTI_QUERY_RETRIEVAL` | `true` | Enable low-cost multi-query retrieval for compound questions |
+| `ENABLE_LLM_MULTI_QUERY` | `true` | Use the LLM to generate retrieval variants for complex questions |
+| `ENABLE_LIGHTWEIGHT_RERANK` | `true` | Blend semantic and lexical signals before generation |
+| `LLM_MULTI_QUERY_MIN_TERMS` | `5` | Minimum extracted query terms before LLM multi-query is attempted |
 | `CORS_ORIGINS` | localhost dev ports | Comma-separated allowed origins |
 
 ### Frontend

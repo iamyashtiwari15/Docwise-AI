@@ -1,5 +1,7 @@
 import ast
+import logging
 import os
+import time
 import uuid
 from typing import Any, Optional
 
@@ -8,6 +10,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from agents.document_ingestion import is_document_upload
 from agents.uploaded_document_store import uploaded_document_store
 from services.session_store import session_store
+
+logger = logging.getLogger(__name__)
 
 
 def convert_history(messages: list[BaseMessage]) -> list[dict[str, str]]:
@@ -79,6 +83,8 @@ class ChatService:
         input_type = "image" if image_bytes else "text"
         image_path = None
 
+        logger.debug("[GRAPH] Invoking agent graph | session=%s | input_type=%s | history_len=%d", session_id, input_type, len(messages))
+
         if image_bytes and image_type:
             extension = image_type.split("/")[-1]
             image_path = f"temp_{uuid.uuid4()}.{extension}"
@@ -104,6 +110,7 @@ class ChatService:
             "chat_history": chat_history,
         }
 
+        t0 = time.perf_counter()
         try:
             from agents.agent_decision import assistant_graph
 
@@ -111,6 +118,11 @@ class ChatService:
         finally:
             if image_path and os.path.exists(image_path):
                 os.remove(image_path)
+
+        latency_ms = (time.perf_counter() - t0) * 1000
+        agents_used = output.get("involved_agents", [])
+        route = output.get("workflow_response", {}).get("query_type", "unknown")
+        logger.info("[GRAPH] Completed | session=%s | agents=%s | route=%s | latency=%.0fms", session_id, agents_used, route, latency_ms)
 
         normalized_messages = [_normalize_message(message) for message in output.get("messages", messages)]
         session_store.set_messages(session_id, normalized_messages)

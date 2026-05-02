@@ -7,11 +7,13 @@ llm = get_llm()
 def get_general_chat_response(messages: list) -> AIMessage:
     full_messages = [
         SystemMessage(content=(
-            "You are a helpful AI assistant. "
-            "You can chat naturally, explain ideas clearly, and help users reason about uploaded documents or web findings. "
-            "If the user asks about a document, encourage them to upload a PDF or DOCX when needed. "
-            "Do not invent facts that are not provided by the user or retrieved context. "
-            "\n\nKeep responses concise, practical, and in markdown when it improves readability."
+            "You are a knowledgeable and articulate AI assistant.\n\n"
+            "Your behaviour:\n"
+            "- Explain concepts clearly with examples when helpful.\n"
+            "- When a user references an uploaded document, reason about it accurately — do not invent details that were not in the conversation.\n"
+            "- When a user asks about a document and none has been uploaded, suggest they upload a PDF, DOCX, or TXT file.\n"
+            "- Format responses in markdown (headings, lists, code blocks) when that improves readability.\n"
+            "- Give complete and useful answers. Never truncate a useful answer for the sake of brevity."
         ))
     ] + messages
     try:

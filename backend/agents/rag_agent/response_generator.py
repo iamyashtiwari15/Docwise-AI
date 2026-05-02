@@ -9,8 +9,15 @@ class ResponseGenerator:
     """
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.llm = get_llm()
+        self.llm = get_llm(role="rag_answerer")
         self.include_sources = True
+
+    def _format_context(self, doc_texts_with_scores: List[tuple]) -> str:
+        parts = []
+        for i, (text, score) in enumerate(doc_texts_with_scores, start=1):
+            label = "primary" if score > 0.75 else "supporting" if score > 0.45 else "background"
+            parts.append(f'<passage id="{i}" relevance="{label}">\n{text}\n</passage>')
+        return "\n\n".join(parts)
 
     def _build_prompt(
         self,
@@ -18,48 +25,26 @@ class ResponseGenerator:
         context: str,
         chat_history: Optional[List[Dict[str, str]]] = None
     ) -> str:
-        table_instructions = """
-        Some of the retrieved information is presented in table format (e.g., timelines, refund rates, warranty durations). When using information from tables:
-        1. Present tabular data using proper markdown table formatting with headers.
-        2. Reformat the table for clarity, ensuring legal terms are clear.
-        3. If adding an interpretation column (e.g., "Meaning"), mention it explicitly.
-        4. Summarize legal requirements or obligations shown in the tables.
-        """
+        history_section = ""
+        if chat_history:
+            turns = "\n".join(
+                f"{msg['role'].capitalize()}: {msg['content']}"
+                for msg in chat_history
+            )
+            history_section = f"<conversation_history>\n{turns}\n</conversation_history>\n\n"
 
-        response_format_instructions = """Instructions:
-        1. Answer the query based ONLY on the information provided in the context.
-        2. If the context doesn't contain relevant information to answer the query, reply exactly in this format (and nothing else):
-           {
-               "Insufficient Information", "I don't have enough information."
-           }
-        3. Do not make up facts that are not supported by the provided context.
-        4. Be concise, accurate, and avoid making assumptions not supported by the context.
-        5. Format the answer with headings, subheadings, and tables (if applicable) in markdown.
-        6. If numerical, date, or policy values are provided, use them exactly as they appear in the context.
-        """
-
-        history_text = "\n".join([f"{msg['role'].capitalize()}: {msg['content']}" for msg in chat_history]) if chat_history else ""
-
-        prompt = f"""You are a grounded assistant. Answer using only the supplied context from uploaded documents or trusted web results.
-
-Here are the last few messages from our conversation:
-{history_text}
-
-The user has asked the following question:
-{query}
-
-I've retrieved the following information to help answer this question:
-{context}
-
-{table_instructions}
-{response_format_instructions}
-
-Based on the provided information, answer the user's question thoroughly but concisely.
-If the information doesn't contain the answer, follow the insufficient information format exactly.
-Do not provide any source link that is not present in the context.
-"""
-
-        return prompt
+        return (
+            f"{history_section}"
+            f"<context>\n{context}\n</context>\n\n"
+            f"<question>\n{query}\n</question>\n\n"
+            "Follow these steps to answer:\n"
+            "Step 1 — Identify what the question is asking for (types of facts needed: dates, amounts, conditions, procedures, definitions, etc.).\n"
+            "Step 2 — Locate every relevant passage in the <context> above that contains those facts.\n"
+            "Step 3 — Write a thorough answer using all relevant evidence. Include every number, date, condition, threshold, exception, and procedure found in the context. Do not omit details that appear in the source.\n"
+            "Step 4 — If the answer has multiple distinct parts, organise it with markdown ## headings and bullet points.\n"
+            "Step 5 — If the context contains a table relevant to the question, reproduce it as a markdown table.\n\n"
+            "If no relevant information is present in the context, respond with exactly: INSUFFICIENT_INFORMATION"
+        )
 
     def generate_response(
         self,
@@ -76,18 +61,20 @@ Do not provide any source link that is not present in the context.
                 if isinstance(doc, tuple):
                     doc_texts_with_scores.append((doc[0].page_content, doc[1]))
                 else:
-                    doc_texts_with_scores.append((doc["content"], doc.get("score", doc.get("metadata", {}).get("score", 1.0))))
+                    ranking_score = doc.get(
+                        "combined_score",
+                        doc.get(
+                            "rerank_score",
+                            doc.get("score", doc.get("metadata", {}).get("score", 1.0)),
+                        ),
+                    )
+                    doc_texts_with_scores.append((doc["content"], ranking_score))
 
             doc_texts_with_scores.sort(key=lambda x: x[1], reverse=True)
 
-            context_parts = []
-            for text, score in doc_texts_with_scores:
-                relevance_marker = "🔥 High Relevance" if score > 0.8 else "✓ Relevant" if score > 0.6 else "ℹ️ Context"
-                context_parts.append(f"\n\n=== {relevance_marker} ===\n{text}")
-            context = "\n".join(context_parts)
-
+            context = self._format_context(doc_texts_with_scores)
             prompt = self._build_prompt(query, context, chat_history)
-            self.logger.info(f"[LOG] Prompt sent to LLM: {prompt}")
+            self.logger.debug("[LOG] Prompt sent to LLM: %s", prompt)
 
             result = self.llm.invoke(prompt)
             response_text = result.content.strip() if result and hasattr(result, "content") else None
@@ -100,8 +87,16 @@ Do not provide any source link that is not present in the context.
                     "sources": [],
                     "confidence": 0.0,
                 }
-            if response_text.startswith("{") and "Insufficient Information" in response_text:
-                return {"response": response_text, "sources": [], "confidence": 0.0}
+            # Detect the sentinel token (or any LLM paraphrase of it)
+            if "INSUFFICIENT_INFORMATION" in response_text or (
+                "Insufficient Information" in response_text and len(response_text) < 200
+            ):
+                self.logger.warning("[LOG] LLM signalled insufficient context for query: %s", query)
+                return {
+                    "response": "I don't have enough information in the provided context to answer that question.",
+                    "sources": [],
+                    "confidence": 0.0,
+                }
 
             sources = self._extract_sources(retrieved_docs) if self.include_sources else []
             confidence = self._calculate_confidence(retrieved_docs)
@@ -122,7 +117,7 @@ Do not provide any source link that is not present in the context.
         except Exception as e:
             self.logger.error(f"Error generating response: {e}")
             return {
-                "response": '{ "Insufficient Information", "I don\'t have enough information." }',
+                "response": "Sorry, something went wrong while generating the response. Please try again.",
                 "sources": [],
                 "confidence": 0.0,
             }

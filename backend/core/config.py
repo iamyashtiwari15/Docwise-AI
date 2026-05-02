@@ -9,6 +9,13 @@ def _split_csv(value: str | None, default: list[str]) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     api_prefix: str
@@ -18,6 +25,16 @@ class Settings:
     session_max_messages: int
     document_relevance_threshold: float
     web_search_max_results: int
+    log_level: str
+    rag_top_k: int
+    rag_candidate_k: int
+    rag_max_query_variants: int
+    document_chunk_size: int
+    document_chunk_overlap: int
+    enable_multi_query_retrieval: bool
+    enable_llm_multi_query: bool
+    enable_lightweight_rerank: bool
+    llm_multi_query_min_terms: int
 
 
 @lru_cache(maxsize=1)
@@ -38,4 +55,14 @@ def get_settings() -> Settings:
         session_max_messages=int(os.getenv("SESSION_MAX_MESSAGES", "30")),
         document_relevance_threshold=float(os.getenv("DOCUMENT_RELEVANCE_THRESHOLD", "0.35")),
         web_search_max_results=int(os.getenv("WEB_SEARCH_MAX_RESULTS", "3")),
+        log_level=os.getenv("LOG_LEVEL", "INFO"),
+        rag_top_k=int(os.getenv("RAG_TOP_K", "4")),
+        rag_candidate_k=int(os.getenv("RAG_CANDIDATE_K", "8")),
+        rag_max_query_variants=int(os.getenv("RAG_MAX_QUERY_VARIANTS", "3")),
+        document_chunk_size=int(os.getenv("DOCUMENT_CHUNK_SIZE", "900")),
+        document_chunk_overlap=int(os.getenv("DOCUMENT_CHUNK_OVERLAP", "150")),
+        enable_multi_query_retrieval=_env_flag("ENABLE_MULTI_QUERY_RETRIEVAL", True),
+        enable_llm_multi_query=_env_flag("ENABLE_LLM_MULTI_QUERY", True),
+        enable_lightweight_rerank=_env_flag("ENABLE_LIGHTWEIGHT_RERANK", True),
+        llm_multi_query_min_terms=int(os.getenv("LLM_MULTI_QUERY_MIN_TERMS", "5")),
     )

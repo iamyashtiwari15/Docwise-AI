@@ -26,53 +26,45 @@ class FlexibleTavilySearchAgent:
         self.tavily_search = TavilySearch(max_results=settings.web_search_max_results)
         self.logger = logging.getLogger(__name__)
 
-    def search(self, query: str, trusted_sites_only: bool = False) -> str:
+    def search_results(self, query: str, trusted_sites_only: bool = False) -> list[dict]:
         """
-        Perform a web search using Tavily API.
-        If trusted_sites_only is True, restrict to trusted sites.
-        Returns a clean, readable string of results.
+        Returns a list of dicts with keys: title, url, content.
+        Empty list on failure.
         """
-        self.logger.info(f"Starting search for query: {query} | trusted_sites_only={trusted_sites_only}")
         clean_query = query.strip('"\'')
         final_query = clean_query
 
         if trusted_sites_only:
-            self.logger.info(f"Performing TRUSTED site search for: {clean_query}")
             site_filter = " OR ".join([f"site:{site}" for site in TRUSTED_SITES])
             final_query = f"{clean_query} ({site_filter})"
-        else:
-            self.logger.info(f"Performing GENERAL web search for: {clean_query}")
 
+        if len(final_query) > 400:
+            final_query = final_query[:400]
+
+        self.logger.info("[TAVILY] Searching | trusted_only=%s | query=%.80r", trusted_sites_only, final_query)
         try:
-            self.logger.info(f"Executing query: {final_query}")
-            if len(final_query) > 400:
-                final_query = final_query[:400]
-
-            # The API returns a dictionary, so we store it as such.
-            # Add timeout handling for better performance
-            import asyncio
-            try:
-                result_dict = self.tavily_search.invoke({"query": final_query})
-            except Exception as api_error:
-                self.logger.warning(f"Tavily API call failed: {api_error}")
-                return "Web search temporarily unavailable. Please try again."
-            
-            self.logger.info(f"Raw result: {str(result_dict)[:200]}")
-
-            # The actual search results are in the "results" key of the dictionary.
+            result_dict = self.tavily_search.invoke({"query": final_query})
             results_list = result_dict.get("results", [])
-
-            # Now we check and process the list we extracted.
-            if results_list and isinstance(results_list, list):
-                # Truncate content for faster processing and limit to 2 results max
-                formatted_results = "\n\n".join([
-                    f"Title: {item.get('title', 'N/A')[:100]}{'...' if len(item.get('title', '')) > 100 else ''}\nURL: {item.get('url', 'N/A')}\nSnippet: {item.get('content', 'N/A')[:200]}{'...' if len(item.get('content', '')) > 200 else ''}" 
-                    for item in results_list[:2]  # Limit to first 2 results
-                ])
-                return formatted_results.strip()
-
-            return "No relevant results were found from the web search."
-
+            self.logger.info("[TAVILY] Got %d results", len(results_list))
+            return [
+                {
+                    "title": item.get("title", "Web result"),
+                    "url": item.get("url", ""),
+                    "content": item.get("content", ""),
+                }
+                for item in results_list
+                if item.get("content")
+            ]
         except Exception as e:
-            self.logger.error(f"Error during web search: {e}")
-            return f"Error retrieving web search results: {e}"
+            self.logger.warning("[TAVILY] Search failed: %s", e)
+            return []
+
+    def search(self, query: str, trusted_sites_only: bool = False) -> str:
+        """Returns formatted string for backward compatibility."""
+        results = self.search_results(query, trusted_sites_only)
+        if not results:
+            return "No relevant results were found from the web search."
+        return "\n\n".join([
+            f"Title: {r['title']}\nURL: {r['url']}\nSnippet: {r['content'][:600]}{'...' if len(r['content']) > 600 else ''}"
+            for r in results
+        ])
