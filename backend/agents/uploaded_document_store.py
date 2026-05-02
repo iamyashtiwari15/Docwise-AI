@@ -1,14 +1,15 @@
-from dataclasses import dataclass
+import math
 import logging
+from dataclasses import dataclass
+from functools import lru_cache
 from threading import Lock
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 from agents.document_ingestion import chunk_document_text, extract_text_from_upload
 from agents.llm_loader import get_embedding_model
 from agents.retrieval_utils import (
     extract_query_terms,
     generate_query_variants,
-    lexical_overlap_score,
     should_use_llm_multi_query,
 )
 from agents.rag_agent.role_llm_loader import get_llm as get_role_llm
@@ -23,25 +24,39 @@ class StoredChunk:
     content: str
     metadata: Dict
     embedding: List[float]
-    terms: frozenset[str]
+    terms: frozenset
 
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _cosine_similarity(left: List[float], right: List[float]) -> float:
-    if left is None or right is None:
+    if not left or not right or len(left) != len(right):
         return 0.0
-
-    left_values = list(left)
-    right_values = list(right)
-    if not left_values or not right_values or len(left_values) != len(right_values):
+    dot = sum(a * b for a, b in zip(left, right))
+    norm_l = sum(v * v for v in left) ** 0.5
+    norm_r = sum(v * v for v in right) ** 0.5
+    if norm_l == 0 or norm_r == 0:
         return 0.0
+    return dot / (norm_l * norm_r)
 
-    dot_product = sum(a * b for a, b in zip(left_values, right_values))
-    left_norm = sum(value * value for value in left_values) ** 0.5
-    right_norm = sum(value * value for value in right_values) ** 0.5
-    if left_norm == 0 or right_norm == 0:
-        return 0.0
-    return dot_product / (left_norm * right_norm)
 
+def _sigmoid(x: float) -> float:
+    return 1.0 / (1.0 + math.exp(-max(-500.0, min(500.0, x))))
+
+
+def _rrf_score(rank: int, k: int = 60) -> float:
+    """Reciprocal Rank Fusion score for a given 0-based rank."""
+    return 1.0 / (k + rank + 1)
+
+
+@lru_cache(maxsize=1)
+def _get_cross_encoder(model_name: str):
+    from sentence_transformers import CrossEncoder
+    logger.info("[RERANK] Loading cross-encoder model: %s", model_name)
+    return CrossEncoder(model_name)
+
+
+# ── Store ─────────────────────────────────────────────────────────────────────
 
 class UploadedDocumentStore:
     def __init__(self, embedding_model=None, query_variant_llm=None):
@@ -50,6 +65,9 @@ class UploadedDocumentStore:
         self._lock = Lock()
         self._session_chunks: Dict[str, List[StoredChunk]] = {}
         self._session_files: Dict[str, List[str]] = {}
+        # BM25 index cache (rebuilt lazily when new docs are added)
+        self._bm25_cache: Dict[str, object] = {}
+        self._bm25_dirty: Dict[str, bool] = {}
 
     def _get_embedding_model(self):
         if self.embedding_model is None:
@@ -61,6 +79,89 @@ class UploadedDocumentStore:
             self.query_variant_llm = get_role_llm(role="multi_query")
         return self.query_variant_llm
 
+    def _get_hyde_llm(self):
+        return get_role_llm(role="hyde")
+
+    # ── BM25 ──────────────────────────────────────────────────────────────────
+
+    def _get_bm25(self, session_id: str, chunks: List[StoredChunk]):
+        if self._bm25_dirty.get(session_id, True) or session_id not in self._bm25_cache:
+            try:
+                from rank_bm25 import BM25Okapi
+                tokenized = [list(c.terms) for c in chunks]
+                self._bm25_cache[session_id] = BM25Okapi(tokenized) if tokenized else None
+            except ImportError:
+                logger.warning("[BM25] rank_bm25 not installed — skipping BM25 retrieval")
+                self._bm25_cache[session_id] = None
+            self._bm25_dirty[session_id] = False
+        return self._bm25_cache.get(session_id)
+
+    # ── HyDE ──────────────────────────────────────────────────────────────────
+
+    def _generate_hyde_embedding(self, query: str) -> Optional[List[float]]:
+        """Embed a hypothetical answer to improve dense retrieval recall."""
+        try:
+            result = self._get_hyde_llm().invoke(query)
+            hypothesis = (result.content if hasattr(result, "content") else str(result)).strip()
+            if not hypothesis:
+                return None
+            logger.info("[HyDE] Generated hypothetical passage (%d chars)", len(hypothesis))
+            return [float(v) for v in self._get_embedding_model().embed_query(hypothesis)]
+        except Exception as exc:
+            logger.warning("[HyDE] Skipped (error): %s", exc)
+            return None
+
+    # ── Context window ────────────────────────────────────────────────────────
+
+    def _expand_with_context_window(
+        self,
+        results: List[Dict],
+        chunks: List[StoredChunk],
+        window_size: int,
+    ) -> List[Dict]:
+        """Prepend/append neighboring chunks to each retrieved result."""
+        if window_size <= 0:
+            return results
+
+        # Build lookup: (source_path, chunk_index) -> content
+        lookup: Dict[Tuple[str, int], str] = {}
+        for c in chunks:
+            src = c.metadata.get("source_path", c.metadata.get("source", ""))
+            idx = int(c.metadata.get("chunk_index", 0))
+            lookup[(src, idx)] = c.content
+
+        expanded = []
+        for res in results:
+            src = res.get("source_path", res.get("source", ""))
+            ci = int(res.get("metadata", {}).get("chunk_index", 0))
+            if ci == 0:
+                expanded.append(res)
+                continue
+
+            before = [
+                lookup[(src, ci - off)]
+                for off in range(window_size, 0, -1)
+                if (src, ci - off) in lookup
+            ]
+            after = [
+                lookup[(src, ci + off)]
+                for off in range(1, window_size + 1)
+                if (src, ci + off) in lookup
+            ]
+
+            if not before and not after:
+                expanded.append(res)
+                continue
+
+            pieces = before + [res["content"]] + after
+            res = dict(res)
+            res["content"] = "\n\n".join(pieces)
+            expanded.append(res)
+
+        return expanded
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
     def add_file(self, session_id: str, filename: str, file_bytes: bytes, content_type: str | None = None) -> Dict:
         text = extract_text_from_upload(filename, file_bytes, content_type=content_type)
         if not text.strip():
@@ -70,20 +171,21 @@ class UploadedDocumentStore:
         if not chunks:
             raise ValueError("The uploaded file does not contain enough text to index.")
 
-        embeddings = self._get_embedding_model().embed_documents([chunk["content"] for chunk in chunks])
+        embeddings = self._get_embedding_model().embed_documents([c["content"] for c in chunks])
         stored_chunks = [
             StoredChunk(
                 content=chunk["content"],
                 metadata=chunk["metadata"],
-                embedding=[float(value) for value in embedding],
+                embedding=[float(v) for v in emb],
                 terms=frozenset(extract_query_terms(chunk["content"])),
             )
-            for chunk, embedding in zip(chunks, embeddings)
+            for chunk, emb in zip(chunks, embeddings)
         ]
 
         with self._lock:
             self._session_chunks.setdefault(session_id, []).extend(stored_chunks)
             self._session_files.setdefault(session_id, []).append(filename)
+            self._bm25_dirty[session_id] = True
 
         return {
             "filename": filename,
@@ -99,7 +201,13 @@ class UploadedDocumentStore:
         with self._lock:
             return list(self._session_files.get(session_id, []))
 
-    def retrieve(self, session_id: str, query: str, top_k: int | None = None, candidate_k: int | None = None) -> List[Dict]:
+    def retrieve(
+        self,
+        session_id: str,
+        query: str,
+        top_k: int | None = None,
+        candidate_k: int | None = None,
+    ) -> List[Dict]:
         settings = get_settings()
         with self._lock:
             chunks = list(self._session_chunks.get(session_id, []))
@@ -108,112 +216,121 @@ class UploadedDocumentStore:
             return []
 
         resolved_top_k = top_k or settings.rag_top_k
-        resolved_candidate_k = max(candidate_k or settings.rag_candidate_k, resolved_top_k)
+        # Use a generous candidate pool so cross-encoder has good material to rerank
+        resolved_candidate_k = max(candidate_k or settings.rag_candidate_k, resolved_top_k * 4)
+
+        # ── 1. Query variants ─────────────────────────────────────────────────
         query_variants = [query]
         if settings.enable_multi_query_retrieval:
-            query_variant_llm = None
+            llm_for_variants = None
             if settings.enable_llm_multi_query and should_use_llm_multi_query(query, settings.llm_multi_query_min_terms):
                 try:
-                    query_variant_llm = self._get_query_variant_llm()
-                except Exception as error:
-                    logger.warning("[RETRIEVE] LLM multi-query unavailable, falling back to heuristics: %s", error)
+                    llm_for_variants = self._get_query_variant_llm()
+                except Exception as exc:
+                    logger.warning("[RETRIEVE] LLM multi-query unavailable: %s", exc)
+            query_variants = generate_query_variants(query, settings.rag_max_query_variants, llm=llm_for_variants)
 
-            query_variants = generate_query_variants(query, settings.rag_max_query_variants, llm=query_variant_llm)
+        # ── 2. HyDE embedding ─────────────────────────────────────────────────
+        hyde_embedding: Optional[List[float]] = None
+        if settings.enable_hyde:
+            hyde_embedding = self._generate_hyde_embedding(query)
 
         logger.info(
-            "[RETRIEVE] session=%s | chunks=%d | query_variants=%d | top_k=%d | candidate_k=%d",
-            session_id,
-            len(chunks),
-            len(query_variants),
-            resolved_top_k,
-            resolved_candidate_k,
+            "[RETRIEVE] session=%s | chunks=%d | variants=%d | hyde=%s | top_k=%d | candidate_k=%d",
+            session_id, len(chunks), len(query_variants), hyde_embedding is not None,
+            resolved_top_k, resolved_candidate_k,
         )
 
-        aggregated_candidates: Dict[tuple[str, int, str], Dict] = {}
+        # ── 3. Dense embeddings for all variants (+ HyDE) ─────────────────────
         embedding_model = self._get_embedding_model()
+        all_query_embeddings: List[List[float]] = [
+            [float(v) for v in embedding_model.embed_query(v)] for v in query_variants
+        ]
+        if hyde_embedding:
+            all_query_embeddings.append(hyde_embedding)
 
-        for variant in query_variants:
-            variant_embedding = [float(value) for value in embedding_model.embed_query(variant)]
-            variant_terms = extract_query_terms(variant)
-            scored_chunks = []
-            for chunk in chunks:
-                semantic_score = _cosine_similarity(variant_embedding, chunk.embedding)
-                lexical_score = lexical_overlap_score(variant_terms, chunk.terms)
-                retrieval_score = semantic_score * 0.9 + lexical_score * 0.1
-                scored_chunks.append((chunk, semantic_score, lexical_score, retrieval_score))
+        # ── 4. BM25 index ─────────────────────────────────────────────────────
+        bm25 = self._get_bm25(session_id, chunks)
 
-            scored_chunks.sort(key=lambda item: item[3], reverse=True)
-            for rank, (chunk, semantic_score, lexical_score, retrieval_score) in enumerate(
-                scored_chunks[:resolved_candidate_k],
-                start=1,
-            ):
-                source = chunk.metadata.get("source", "uploaded_document")
-                source_path = chunk.metadata.get("source_path", source)
-                chunk_index = int(chunk.metadata.get("chunk_index", rank))
-                candidate_key = (source_path, chunk_index, chunk.content)
+        # ── 5. Hybrid retrieval → RRF fusion ──────────────────────────────────
+        rrf_scores: Dict[int, float] = {}
 
-                candidate = aggregated_candidates.setdefault(
-                    candidate_key,
-                    {
-                        "content": chunk.content,
-                        "source": source,
-                        "source_path": source_path,
-                        "metadata": dict(chunk.metadata),
-                        "score": 0.0,
-                        "rerank_score": 0.0,
-                        "combined_score": 0.0,
-                        "variant_hits": 0,
-                        "best_rank": rank,
-                        "lexical_score": 0.0,
-                        "retrieval_score": 0.0,
-                    },
-                )
-                candidate["score"] = max(candidate["score"], semantic_score)
-                candidate["lexical_score"] = max(candidate["lexical_score"], lexical_score)
-                candidate["retrieval_score"] = max(candidate["retrieval_score"], retrieval_score)
-                candidate["variant_hits"] += 1
-                candidate["best_rank"] = min(candidate["best_rank"], rank)
+        # Dense: one ranking per query embedding
+        for emb in all_query_embeddings:
+            dense_scores = [_cosine_similarity(emb, c.embedding) for c in chunks]
+            dense_ranking = sorted(range(len(chunks)), key=lambda i: dense_scores[i], reverse=True)
+            for rank, idx in enumerate(dense_ranking[:resolved_candidate_k]):
+                rrf_scores[idx] = rrf_scores.get(idx, 0.0) + _rrf_score(rank)
 
-        total_variants = max(len(query_variants), 1)
-        results = []
-        for candidate in aggregated_candidates.values():
-            multi_query_support = candidate["variant_hits"] / total_variants if total_variants > 1 else 0.0
-            rerank_score = candidate["retrieval_score"]
-            combined_score = (
-                rerank_score * 0.95 + multi_query_support * 0.05
-                if settings.enable_lightweight_rerank
-                else candidate["score"]
+        # BM25: one ranking per query variant
+        if bm25 is not None:
+            for variant in query_variants:
+                terms = list(extract_query_terms(variant))
+                if not terms:
+                    continue
+                bm25_raw = bm25.get_scores(terms)
+                bm25_ranking = sorted(range(len(chunks)), key=lambda i: bm25_raw[i], reverse=True)
+                for rank, idx in enumerate(bm25_ranking[:resolved_candidate_k]):
+                    rrf_scores[idx] = rrf_scores.get(idx, 0.0) + _rrf_score(rank)
+
+        # Sort candidates by combined RRF score
+        sorted_candidates = sorted(rrf_scores, key=lambda i: rrf_scores[i], reverse=True)[:resolved_candidate_k]
+
+        # ── 6. Cross-encoder reranking ────────────────────────────────────────
+        ce_score_map: Dict[int, float] = {}
+        if settings.enable_cross_encoder_rerank and sorted_candidates:
+            try:
+                cross_encoder = _get_cross_encoder(settings.cross_encoder_model_name)
+                pairs = [(query, chunks[i].content) for i in sorted_candidates]
+                logits = cross_encoder.predict(pairs)
+                ce_scores = [_sigmoid(float(s)) for s in logits]
+                sorted_candidates = [
+                    sorted_candidates[j]
+                    for j in sorted(range(len(sorted_candidates)), key=lambda j: ce_scores[j], reverse=True)
+                ]
+                ce_score_map = {sorted_candidates[j]: ce_scores[j] for j in range(len(sorted_candidates))}
+                logger.info("[RERANK] Cross-encoder applied | top_score=%.3f", max(ce_scores))
+            except Exception as exc:
+                logger.warning("[RERANK] Cross-encoder failed, using RRF order: %s", exc)
+
+        # ── 7. Build result dicts for top-k ──────────────────────────────────
+        results: List[Dict] = []
+        for idx in sorted_candidates[:resolved_top_k]:
+            chunk = chunks[idx]
+            rrf = rrf_scores.get(idx, 0.0)
+            ce = ce_score_map.get(idx)
+
+            best_semantic = max(
+                _cosine_similarity(emb, chunk.embedding) for emb in all_query_embeddings
             )
+            combined = ce if ce is not None else rrf
 
-            metadata = {
-                **candidate["metadata"],
-                "score": candidate["score"],
-                "rerank_score": rerank_score,
-                "combined_score": combined_score,
-                "variant_hits": candidate["variant_hits"],
-                "best_rank": candidate["best_rank"],
-            }
-            results.append(
-                {
-                    "content": candidate["content"],
-                    "score": candidate["score"],
-                    "rerank_score": rerank_score,
-                    "combined_score": combined_score,
-                    "source": candidate["source"],
-                    "source_path": candidate["source_path"],
-                    "metadata": metadata,
-                }
-            )
+            results.append({
+                "content": chunk.content,
+                "score": best_semantic,
+                "rerank_score": combined,
+                "combined_score": combined,
+                "source": chunk.metadata.get("source", "uploaded_document"),
+                "source_path": chunk.metadata.get("source_path", chunk.metadata.get("source", "")),
+                "metadata": {
+                    **chunk.metadata,
+                    "score": best_semantic,
+                    "rerank_score": combined,
+                    "combined_score": combined,
+                    "rrf_score": rrf,
+                },
+            })
 
-        results.sort(
-            key=lambda item: (
-                item.get("combined_score", item.get("rerank_score", item.get("score", 0.0))),
-                item.get("score", 0.0),
-                -item.get("metadata", {}).get("best_rank", 9999),
-            ),
-            reverse=True,
+        # ── 8. Context window expansion ───────────────────────────────────────
+        if settings.rag_window_size > 0:
+            results = self._expand_with_context_window(results, chunks, settings.rag_window_size)
+
+        logger.info(
+            "[RETRIEVE] Done | returned=%d | top_score=%.3f",
+            len(results),
+            results[0]["combined_score"] if results else 0.0,
         )
-        return results[:resolved_top_k]
+        return results
 
 
 uploaded_document_store = UploadedDocumentStore()

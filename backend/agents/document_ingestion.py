@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 from typing import Dict, List
 
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from docx import Document as DocxDocument
 
 from core.config import get_settings
@@ -25,8 +25,13 @@ def is_document_upload(filename: str | None, content_type: str | None) -> bool:
 
 def _extract_pdf_text(file_bytes: bytes) -> str:
     reader = PdfReader(BytesIO(file_bytes))
-    pages = [page.extract_text() or "" for page in reader.pages]
-    return "\n".join(page.strip() for page in pages if page and page.strip())
+    pages = []
+    for i, page in enumerate(reader.pages):
+        text = page.extract_text() or ""
+        if text.strip():
+            # Prefix each page with a marker so downstream chunking can record page numbers
+            pages.append(f"[PAGE {i + 1}]\n{text.strip()}")
+    return "\n\n".join(pages)
 
 
 def _extract_docx_text(file_bytes: bytes) -> str:
@@ -169,16 +174,15 @@ def chunk_document_text(text: str, source_name: str, chunk_size: int | None = No
         projected = current_length + len(unit) + (1 if current_units else 0)
         if current_units and projected > resolved_chunk_size:
             chunk_text = "\n".join(current_units).strip()
-            chunks.append(
-                {
-                    "content": chunk_text,
-                    "metadata": {
-                        "source": source_name,
-                        "source_path": source_name,
-                        "chunk_index": chunk_index,
-                    },
-                }
-            )
+            metadata: Dict = {
+                "source": source_name,
+                "source_path": source_name,
+                "chunk_index": chunk_index,
+            }
+            page_match = re.search(r"\[PAGE (\d+)\]", chunk_text)
+            if page_match:
+                metadata["page_number"] = int(page_match.group(1))
+            chunks.append({"content": chunk_text, "metadata": metadata})
             chunk_index += 1
 
             overlap_units = _build_overlap_units(current_units, resolved_overlap)
@@ -194,15 +198,15 @@ def chunk_document_text(text: str, source_name: str, chunk_size: int | None = No
         current_length += len(unit) + (1 if len(current_units) > 1 else 0)
 
     if current_units:
-        chunks.append(
-            {
-                "content": "\n".join(current_units).strip(),
-                "metadata": {
-                    "source": source_name,
-                    "source_path": source_name,
-                    "chunk_index": chunk_index,
-                },
-            }
-        )
+        chunk_text = "\n".join(current_units).strip()
+        metadata = {
+            "source": source_name,
+            "source_path": source_name,
+            "chunk_index": chunk_index,
+        }
+        page_match = re.search(r"\[PAGE (\d+)\]", chunk_text)
+        if page_match:
+            metadata["page_number"] = int(page_match.group(1))
+        chunks.append({"content": chunk_text, "metadata": metadata})
 
     return chunks

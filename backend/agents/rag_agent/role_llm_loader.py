@@ -70,6 +70,13 @@ def get_llm(role: str = "default"):
             "3. Do not invent facts or add new requirements\n"
             "4. Return only retrieval-friendly variants, not final answers"
         ),
+        "hyde": (
+            "You are a document passage writer. Given a user question, write a single dense factual passage "
+            "that would appear in an authoritative document and directly answer the question. "
+            "Write only the passage — no preamble, no hedging, no 'based on the question'. "
+            "Include specific numbers, dates, conditions, thresholds and procedures that a real document would contain. "
+            "Write as if you are the document itself."
+        ),
         "query_rewriter": (
             "You are a query rewriter. Convert follow-up questions into fully self-contained questions by resolving any references to prior conversation. "
             "Do not change the meaning. Return only the rewritten question, nothing else."

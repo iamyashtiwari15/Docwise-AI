@@ -34,16 +34,28 @@ def get_llm(model_name: str | None = None):
 
 class NamedHuggingFaceEmbeddings(HuggingFaceEmbeddings):
     def name(self):
-        return "sentence-transformers/all-MiniLM-L6-v2"
+        return self.model_name
 
 @lru_cache(maxsize=1)
 def get_embedding_model():
     """
-    Loads the default sentence embedding model using HuggingFace.
+    Loads the sentence embedding model. Automatically adds a query instruction
+    prefix for BGE-family models (required for asymmetric retrieval quality).
     """
     settings = get_settings()
-    device = os.getenv("EMBEDDING_DEVICE", "cpu")
+    model_name = settings.embedding_model_name
+    device = settings.embedding_device
+
+    # BGE models need a query instruction for asymmetric (query→passage) retrieval
+    query_instruction = (
+        "Represent this sentence for searching relevant passages: "
+        if "bge" in model_name.lower()
+        else ""
+    )
+
     return NamedHuggingFaceEmbeddings(
-        model_name=settings.embedding_model_name,
+        model_name=model_name,
         model_kwargs={"device": device},
+        encode_kwargs={"normalize_embeddings": True},
+        query_instruction=query_instruction or None,
     )

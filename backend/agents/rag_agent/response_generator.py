@@ -14,9 +14,18 @@ class ResponseGenerator:
 
     def _format_context(self, doc_texts_with_scores: List[tuple]) -> str:
         parts = []
-        for i, (text, score) in enumerate(doc_texts_with_scores, start=1):
+        for i, item in enumerate(doc_texts_with_scores, start=1):
+            if len(item) == 3:
+                text, score, metadata = item
+            else:
+                text, score = item
+                metadata = {}
             label = "primary" if score > 0.75 else "supporting" if score > 0.45 else "background"
-            parts.append(f'<passage id="{i}" relevance="{label}">\n{text}\n</passage>')
+            page = metadata.get("page_number")
+            page_attr = f' page="{page}"' if page else ""
+            source = metadata.get("source", "")
+            source_attr = f' source="{source}"' if source else ""
+            parts.append(f'<passage id="{i}" relevance="{label}"{page_attr}{source_attr}>\n{text}\n</passage>')
         return "\n\n".join(parts)
 
     def _build_prompt(
@@ -42,7 +51,8 @@ class ResponseGenerator:
             "Step 2 — Locate every relevant passage in the <context> above that contains those facts.\n"
             "Step 3 — Write a thorough answer using all relevant evidence. Include every number, date, condition, threshold, exception, and procedure found in the context. Do not omit details that appear in the source.\n"
             "Step 4 — If the answer has multiple distinct parts, organise it with markdown ## headings and bullet points.\n"
-            "Step 5 — If the context contains a table relevant to the question, reproduce it as a markdown table.\n\n"
+            "Step 5 — If the context contains a table relevant to the question, reproduce it as a markdown table.\n"
+            "Step 6 — Where a passage has a page attribute (e.g. page=\"5\"), cite it as '(Page 5)' inline so the user can locate the information in the original document.\n\n"
             "If no relevant information is present in the context, respond with exactly: INSUFFICIENT_INFORMATION"
         )
 
@@ -59,7 +69,7 @@ class ResponseGenerator:
             doc_texts_with_scores = []
             for doc in retrieved_docs:
                 if isinstance(doc, tuple):
-                    doc_texts_with_scores.append((doc[0].page_content, doc[1]))
+                    doc_texts_with_scores.append((doc[0].page_content, doc[1], {}))
                 else:
                     ranking_score = doc.get(
                         "combined_score",
@@ -68,7 +78,7 @@ class ResponseGenerator:
                             doc.get("score", doc.get("metadata", {}).get("score", 1.0)),
                         ),
                     )
-                    doc_texts_with_scores.append((doc["content"], ranking_score))
+                    doc_texts_with_scores.append((doc["content"], ranking_score, doc.get("metadata", {})))
 
             doc_texts_with_scores.sort(key=lambda x: x[1], reverse=True)
 
