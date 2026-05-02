@@ -33,29 +33,35 @@ def get_llm(model_name: str | None = None):
     return llm
 
 class NamedHuggingFaceEmbeddings(HuggingFaceEmbeddings):
+    """HuggingFaceEmbeddings with an optional query-time instruction prefix (for BGE models)."""
+    _query_instruction: str = ""
+
     def name(self):
         return self.model_name
+
+    def embed_query(self, text: str) -> list:
+        prefixed = f"{self._query_instruction}{text}" if self._query_instruction else text
+        return super().embed_query(prefixed)
+
 
 @lru_cache(maxsize=1)
 def get_embedding_model():
     """
-    Loads the sentence embedding model. Automatically adds a query instruction
-    prefix for BGE-family models (required for asymmetric retrieval quality).
+    Loads the sentence embedding model. For BGE-family models the query instruction
+    is injected at embed_query time (not as a constructor arg — Pydantic forbids extras).
     """
     settings = get_settings()
     model_name = settings.embedding_model_name
     device = settings.embedding_device
 
-    # BGE models need a query instruction for asymmetric (query→passage) retrieval
-    query_instruction = (
-        "Represent this sentence for searching relevant passages: "
-        if "bge" in model_name.lower()
-        else ""
-    )
-
-    return NamedHuggingFaceEmbeddings(
+    model = NamedHuggingFaceEmbeddings(
         model_name=model_name,
         model_kwargs={"device": device},
         encode_kwargs={"normalize_embeddings": True},
-        query_instruction=query_instruction or None,
     )
+
+    # BGE models require a query-side instruction prefix for asymmetric retrieval quality
+    if "bge" in model_name.lower():
+        model._query_instruction = "Represent this sentence for searching relevant passages: "
+
+    return model
