@@ -136,6 +136,32 @@ class ChatService:
         agent_output = self._invoke_agent_graph(message, session_id, image_bytes=file_bytes, image_type=content_type)
         return _extract_response_payload(agent_output)
 
+    def ingest_document_background(
+        self,
+        session_id: str,
+        filename: str,
+        file_bytes: bytes,
+        content_type: str | None,
+    ) -> None:
+        """
+        Background worker: chunk + embed a document and record ingestion status.
+        Called by the /ingest endpoint immediately when user attaches a file.
+        """
+        from agents.uploaded_document_store import ingestion_tracker
+        logger.info("[INGEST] Background ingestion started | session=%s | filename=%s", session_id, filename)
+        try:
+            result = uploaded_document_store.add_file(session_id, filename, file_bytes, content_type)
+            session_store.append_message(session_id, HumanMessage(content=f"[Uploaded file: {filename}]"))
+            ingestion_tracker.finish(session_id, filename, result["chunk_count"])
+            logger.info(
+                "[INGEST] Done | session=%s | filename=%s | chunks=%d",
+                session_id, filename, result["chunk_count"],
+            )
+        except Exception as exc:
+            from agents.uploaded_document_store import ingestion_tracker
+            ingestion_tracker.fail(session_id, filename, str(exc))
+            logger.error("[INGEST] Failed | session=%s | filename=%s | error=%s", session_id, filename, exc)
+
     def process_upload(
         self,
         session_id: str,
@@ -145,14 +171,46 @@ class ChatService:
         message: str = "",
     ) -> dict[str, Any]:
         if is_document_upload(filename, content_type):
-            ingestion_result = uploaded_document_store.add_file(session_id, filename, file_bytes, content_type)
-            session_store.append_message(session_id, HumanMessage(content=f"[Uploaded file: {filename}]"))
+            from agents.uploaded_document_store import IngestionStatus, ingestion_tracker
+
+            status = ingestion_tracker.get_status(session_id, filename)
+
+            if status == IngestionStatus.DONE:
+                # Already indexed by background /ingest — skip re-ingestion
+                logger.info("[UPLOAD] File already indexed via /ingest | session=%s | file=%s", session_id, filename)
+                chunk_count = uploaded_document_store.chunk_count(session_id)
+
+            elif status == IngestionStatus.PENDING:
+                # Background indexing is in progress — wait for it
+                logger.info("[UPLOAD] Waiting for background ingestion | session=%s | file=%s", session_id, filename)
+                entry = ingestion_tracker.wait(session_id, filename, timeout=120.0)
+                if entry and entry.status == IngestionStatus.ERROR:
+                    return {
+                        "response": f"⚠️ Failed to index **{filename}**: {entry.error}",
+                        "sources": [], "confidence": 0.0, "query_type": "document",
+                    }
+                chunk_count = entry.chunk_count if entry else 0
+
+            else:
+                # /ingest was never called (e.g. direct API use) — ingest synchronously
+                ingestion_tracker.start(session_id, filename)
+                try:
+                    result = uploaded_document_store.add_file(session_id, filename, file_bytes, content_type)
+                    chunk_count = result["chunk_count"]
+                    session_store.append_message(session_id, HumanMessage(content=f"[Uploaded file: {filename}]"))
+                    ingestion_tracker.finish(session_id, filename, chunk_count)
+                except Exception as exc:
+                    ingestion_tracker.fail(session_id, filename, str(exc))
+                    return {
+                        "response": f"⚠️ Failed to index **{filename}**: {exc}",
+                        "sources": [], "confidence": 0.0, "query_type": "document",
+                    }
 
             if message.strip():
                 return self.process_text_message(session_id, message)
 
             response_text = (
-                f"Uploaded **{filename}** and indexed {ingestion_result['chunk_count']} chunks. "
+                f"Uploaded **{filename}** and indexed {chunk_count} chunks. "
                 "You can now ask questions about the uploaded document."
             )
             session_store.append_message(session_id, AIMessage(content=response_text))

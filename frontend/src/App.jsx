@@ -41,6 +41,7 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState(null)
   const [selectedFilePreview, setSelectedFilePreview] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [indexingFile, setIndexingFile] = useState(null) // filename currently being indexed
   const messagesEndRef = useRef(null)
 
   const sessionId = useMemo(() => getSessionId(), [])
@@ -96,7 +97,7 @@ export default function App() {
     setSelectedFilePreview(null)
   }
 
-  function handleFileChange(event) {
+  async function handleFileChange(event) {
     const file = event.target.files?.[0]
     if (!file) {
       return
@@ -119,6 +120,19 @@ export default function App() {
     if (isSupportedDocument) {
       setSelectedFile(file)
       setSelectedFilePreview({ type: 'file', value: file.name, name: file.name })
+
+      // Eagerly send to /ingest so chunking + embedding starts immediately
+      setIndexingFile(file.name)
+      try {
+        const formData = new FormData()
+        formData.append('session_id', sessionId)
+        formData.append('file', file)
+        await fetch(`${API_BASE_URL}/ingest`, { method: 'POST', body: formData })
+      } catch (err) {
+        console.warn('Background ingest failed (will retry on send):', err)
+      } finally {
+        setIndexingFile(null)
+      }
       return
     }
 
@@ -298,7 +312,12 @@ export default function App() {
               {selectedFilePreview.type === 'image' ? (
                 <img src={selectedFilePreview.value} alt={selectedFilePreview.name} className="preview-image" />
               ) : (
-                <div className="file-chip">{selectedFilePreview.name}</div>
+                <div className="file-chip">
+                  {selectedFilePreview.name}
+                  {indexingFile === selectedFilePreview.name && (
+                    <span className="indexing-badge"> ⏳ indexing…</span>
+                  )}
+                </div>
               )}
               <button type="button" className="ghost-button" onClick={removeSelectedFile}>
                 Remove

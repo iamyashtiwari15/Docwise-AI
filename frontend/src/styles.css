@@ -172,6 +172,12 @@ body {
   color: #e2e8f0;
 }
 
+.indexing-badge {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-style: italic;
+}
+
 .composer {
   padding: 18px 24px 24px;
   border-top: 1px solid #1e293b;

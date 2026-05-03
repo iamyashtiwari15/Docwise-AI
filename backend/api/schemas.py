@@ -26,3 +26,10 @@ class HistoryResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+
+
+class IngestResponse(BaseModel):
+    status: str          # "indexing" | "already_indexed" | "error"
+    filename: str
+    chunk_count: int | None = None
+    message: str | None = None

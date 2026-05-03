@@ -1,8 +1,9 @@
 import math
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from functools import lru_cache
-from threading import Lock
+from threading import Event, Lock
 from typing import Dict, List, Optional, Tuple
 
 from agents.document_ingestion import chunk_document_text, extract_text_from_upload
@@ -54,6 +55,88 @@ def _get_cross_encoder(model_name: str):
     from sentence_transformers import CrossEncoder
     logger.info("[RERANK] Loading cross-encoder model: %s", model_name)
     return CrossEncoder(model_name)
+
+
+# ── Ingestion status tracking ─────────────────────────────────────────────────
+
+class IngestionStatus(str, Enum):
+    PENDING  = "pending"
+    DONE     = "done"
+    ERROR    = "error"
+
+
+@dataclass
+class _IngestionEntry:
+    status: IngestionStatus = IngestionStatus.PENDING
+    event: Event = field(default_factory=Event)
+    error: Optional[str] = None
+    chunk_count: int = 0
+
+
+class IngestionTracker:
+    """
+    Tracks per-session per-file ingestion state.
+    Callers can wait() until a file is done indexing before querying.
+    """
+    def __init__(self):
+        self._lock = Lock()
+        self._entries: Dict[str, _IngestionEntry] = {}  # key = "session_id::filename"
+
+    @staticmethod
+    def _key(session_id: str, filename: str) -> str:
+        return f"{session_id}::{filename}"
+
+    def start(self, session_id: str, filename: str) -> bool:
+        """Register a file as PENDING. Returns False if already tracked (skip re-ingest)."""
+        key = self._key(session_id, filename)
+        with self._lock:
+            if key in self._entries:
+                return False
+            self._entries[key] = _IngestionEntry()
+            return True
+
+    def finish(self, session_id: str, filename: str, chunk_count: int) -> None:
+        key = self._key(session_id, filename)
+        with self._lock:
+            entry = self._entries.get(key)
+        if entry:
+            entry.chunk_count = chunk_count
+            entry.status = IngestionStatus.DONE
+            entry.event.set()
+
+    def fail(self, session_id: str, filename: str, error: str) -> None:
+        key = self._key(session_id, filename)
+        with self._lock:
+            entry = self._entries.get(key)
+        if entry:
+            entry.error = error
+            entry.status = IngestionStatus.ERROR
+            entry.event.set()
+
+    def wait(self, session_id: str, filename: str, timeout: float = 120.0) -> Optional["_IngestionEntry"]:
+        """Block until ingestion completes (or timeout). Returns the entry."""
+        key = self._key(session_id, filename)
+        with self._lock:
+            entry = self._entries.get(key)
+        if not entry:
+            return None
+        entry.event.wait(timeout=timeout)
+        return entry
+
+    def is_done(self, session_id: str, filename: str) -> bool:
+        key = self._key(session_id, filename)
+        with self._lock:
+            entry = self._entries.get(key)
+        return entry is not None and entry.status == IngestionStatus.DONE
+
+    def get_status(self, session_id: str, filename: str) -> Optional[IngestionStatus]:
+        key = self._key(session_id, filename)
+        with self._lock:
+            entry = self._entries.get(key)
+        return entry.status if entry else None
+
+
+ingestion_tracker = IngestionTracker()
 
 
 # ── Store ─────────────────────────────────────────────────────────────────────
@@ -196,6 +279,10 @@ class UploadedDocumentStore:
     def has_documents(self, session_id: str) -> bool:
         with self._lock:
             return bool(self._session_chunks.get(session_id))
+
+    def chunk_count(self, session_id: str) -> int:
+        with self._lock:
+            return len(self._session_chunks.get(session_id, []))
 
     def list_files(self, session_id: str) -> List[str]:
         with self._lock:

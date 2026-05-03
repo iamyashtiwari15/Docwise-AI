@@ -2,10 +2,10 @@ import asyncio
 import logging
 import time
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
-from api.schemas import ChatResponse, HealthResponse, HistoryRequest, HistoryResponse
+from api.schemas import ChatResponse, HealthResponse, HistoryRequest, HistoryResponse, IngestResponse
 from core.config import get_settings
 from services.chat_service import chat_service
 
@@ -17,6 +17,37 @@ router = APIRouter(prefix=settings.api_prefix, tags=["assistant"])
 @router.get("/health", response_model=HealthResponse)
 async def healthcheck() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@router.post("/ingest", response_model=IngestResponse, status_code=202)
+async def ingest_endpoint(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    session_id: str = Form(...),
+):
+    """
+    Eagerly index a document in the background as soon as the user attaches it,
+    before they type and send a query.  Returns 202 immediately.
+    """
+    filename = file.filename or "uploaded_file"
+    content_type = file.content_type
+    logger.info("[INGEST] POST /ingest | session=%s | filename=%s", session_id, filename)
+
+    from agents.uploaded_document_store import ingestion_tracker
+    started = ingestion_tracker.start(session_id, filename)
+    if not started:
+        # Already indexed or currently indexing — nothing to do
+        return IngestResponse(status="already_indexed", filename=filename, message="Already indexed.")
+
+    file_bytes = await file.read()
+    background_tasks.add_task(
+        chat_service.ingest_document_background,
+        session_id,
+        filename,
+        file_bytes,
+        content_type,
+    )
+    return IngestResponse(status="indexing", filename=filename, message="Indexing started in background.")
 
 
 @router.post("/chat", response_model=ChatResponse)
