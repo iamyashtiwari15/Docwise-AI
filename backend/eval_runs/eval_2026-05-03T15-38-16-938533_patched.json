@@ -1,0 +1,183 @@
+{
+  "timestamp": "2026-05-03T15:38:16.938533",
+  "test_set_size": 25,
+  "document_ingested": "AmbedkarAnnihilationofCastes.pdf",
+  "chunk_count": 230,
+  "retrieval": {
+    "recall@5": 0.6905,
+    "precision@5": 0.6857,
+    "mrr": 0.7857,
+    "ndcg@5": 0.9897,
+    "n_evaluated": 14,
+    "retrieval_failures": [
+      {
+        "question": "What does Ambedkar mean by 'graded inequality'?",
+        "hints": [
+          "graded inequality",
+          "ascending",
+          "descending"
+        ]
+      },
+      {
+        "question": "How does Ambedkar describe the relationship between caste and democracy?",
+        "hints": [
+          "democracy",
+          "fraternity",
+          "liberty"
+        ]
+      },
+      {
+        "question": "What does Ambedkar say about the Hindu social order and its attitude toward indi",
+        "hints": [
+          "Hindu social order",
+          "individual",
+          "rights"
+        ]
+      }
+    ]
+  },
+  "generation": {
+    "faithfulness": 0.8214,
+    "answer_relevancy": 0.5714,
+    "answer_correctness": 0.3929,
+    "n_evaluated": 14,
+    "per_question": [
+      {
+        "question": "What is the central argument of Annihilation of Caste?",
+        "faithfulness": 1.0,
+        "answer_relevancy": 1.0,
+        "answer_correctness": 1.0
+      },
+      {
+        "question": "According to Ambedkar, why is religion the real basis of caste?",
+        "faithfulness": 0.5,
+        "answer_relevancy": 0.5,
+        "answer_correctness": 0.5
+      },
+      {
+        "question": "What does Ambedkar mean by 'graded inequality'?",
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.0,
+        "answer_correctness": 0.0
+      },
+      {
+        "question": "What solution does Ambedkar propose for annihilating caste?",
+        "faithfulness": 1.0,
+        "answer_relevancy": 1.0,
+        "answer_correctness": 0.5
+      },
+      {
+        "question": "How does Ambedkar describe the relationship between caste and democracy?",
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.0,
+        "answer_correctness": 0.0
+      },
+      {
+        "question": "How does Ambedkar critique Gandhi's approach to the caste question?",
+        "faithfulness": 1.0,
+        "answer_relevancy": 1.0,
+        "answer_correctness": 1.0
+      },
+      {
+        "question": "What was the Jat-Pat-Todak Mandal and what was its connection to this speech?",
+        "faithfulness": 1.0,
+        "answer_relevancy": 1.0,
+        "answer_correctness": 0.5
+      },
+      {
+        "question": "How does Ambedkar describe the condition of untouchables under the caste system?",
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.5,
+        "answer_correctness": 0.5
+      },
+      {
+        "question": "What does Ambedkar argue about the priority of social reform versus political re",
+        "faithfulness": 1.0,
+        "answer_relevancy": 1.0,
+        "answer_correctness": 1.0
+      },
+      {
+        "question": "Why does Ambedkar argue that caste prevents Hindu society from achieving unity a",
+        "faithfulness": 1.0,
+        "answer_relevancy": 1.0,
+        "answer_correctness": 0.5
+      },
+      {
+        "question": "What does Ambedkar say about inter-caste marriage AND the role of education in f",
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.0,
+        "answer_correctness": 0.0
+      },
+      {
+        "question": "How does Ambedkar compare caste-based discrimination in India to class-based dis",
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.0,
+        "answer_correctness": 0.0
+      },
+      {
+        "question": "According to Ambedkar, what is the relationship between caste and economic inequ",
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.0,
+        "answer_correctness": 0.0
+      },
+      {
+        "question": "What does Ambedkar say about the Hindu social order and its attitude toward indi",
+        "faithfulness": 1.0,
+        "answer_relevancy": 1.0,
+        "answer_correctness": 0.0
+      }
+    ],
+    "patched_questions": 4
+  },
+  "routing": {
+    "overall_accuracy": 0.92,
+    "false_retrieval_rate": 0.1818,
+    "per_class": {
+      "document": {
+        "precision": 0.875,
+        "recall": 1.0,
+        "f1": 0.9333
+      },
+      "web": {
+        "precision": 1.0,
+        "recall": 0.75,
+        "f1": 0.8571
+      },
+      "general": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    },
+    "confusion_matrix": {
+      "document\u2192document": 14,
+      "web\u2192document": 2,
+      "web\u2192web": 6,
+      "general\u2192general": 3
+    },
+    "routing_failures": [
+      {
+        "question": "Can you explain photosynthesis to me?",
+        "expected": "web",
+        "predicted": "document",
+        "category": "adversarial_explain_keyword"
+      },
+      {
+        "question": "Analyze the stock market trends in India in 2025",
+        "expected": "web",
+        "predicted": "document",
+        "category": "adversarial_analyze_vs_web"
+      }
+    ],
+    "n_evaluated": 25
+  },
+  "system": {
+    "latency_p50": 16.556,
+    "latency_p95": 20.267,
+    "latency_p99": 20.267,
+    "latency_mean": 12.828,
+    "error_rate": 0.0,
+    "total_queries": 10
+  },
+  "cost_per_query_usd": 0.001575
+}

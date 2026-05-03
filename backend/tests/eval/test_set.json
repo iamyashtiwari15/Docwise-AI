@@ -1,0 +1,230 @@
+[
+  {
+    "question": "What is the central argument of Annihilation of Caste?",
+    "ground_truth_answer": "Ambedkar argues that caste must be completely annihilated rather than merely reformed. It is a fundamental social evil rooted in Hindu religious authority, and no amount of social reform can destroy it without also destroying the religious sanction that sustains it.",
+    "ground_truth_content_hints": ["annihilat", "caste", "reform"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "core_argument",
+    "difficulty": "easy"
+  },
+  {
+    "question": "According to Ambedkar, why is religion the real basis of caste?",
+    "ground_truth_answer": "Ambedkar argues that caste is not a social institution but a religious one, divinely ordained through Hindu scriptures (Shastras). As long as the Shastras hold authority over Hindu society, caste cannot be destroyed by social reform alone — the religious texts themselves must be repudiated.",
+    "ground_truth_content_hints": ["Shastras", "religion", "Hindu"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "religion_and_caste",
+    "difficulty": "medium"
+  },
+  {
+    "question": "What does Ambedkar mean by 'graded inequality'?",
+    "ground_truth_answer": "Graded inequality means the caste system arranges castes in a hierarchy where each caste ranks higher than the one below it. This means even oppressed castes participate in oppressing those beneath them, making collective solidarity and resistance against the system very difficult.",
+    "ground_truth_content_hints": ["graded", "gradation", "hierarchy"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "core_concept",
+    "difficulty": "medium"
+  },
+  {
+    "question": "What solution does Ambedkar propose for annihilating caste?",
+    "ground_truth_answer": "Ambedkar proposes inter-caste dining and inter-caste marriage as necessary social reforms to break caste barriers. More fundamentally, he argues that the Hindu Shastras — the religious texts that sanction caste — must be destroyed or repudiated, as caste cannot be annihilated without destroying its religious foundation.",
+    "ground_truth_content_hints": ["inter-caste", "marriage", "Shastras"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "solution",
+    "difficulty": "medium"
+  },
+  {
+    "question": "How does Ambedkar describe the relationship between caste and democracy?",
+    "ground_truth_answer": "Ambedkar argues that political democracy cannot survive without social democracy as its foundation. Caste destroys the spirit of fraternity and brotherhood essential for democracy. A society divided by caste cannot sustain liberty, equality, and fraternity — the three pillars of democracy.",
+    "ground_truth_content_hints": ["democracy", "fraternity", "osmosis"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "democracy",
+    "difficulty": "medium"
+  },
+  {
+    "question": "How does Ambedkar critique Gandhi's approach to the caste question?",
+    "ground_truth_answer": "Ambedkar criticises Gandhi for supporting the varnashrama dharma (the four-varna system) while opposing untouchability. Ambedkar argues this is contradictory — caste is the root cause of untouchability, and supporting varna while opposing its worst manifestation is hypocritical and ineffective.",
+    "ground_truth_content_hints": ["Gandhi", "varna", "untouchability"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "gandhi_debate",
+    "difficulty": "hard"
+  },
+  {
+    "question": "What was the Jat-Pat-Todak Mandal and what was its connection to this speech?",
+    "ground_truth_answer": "The Jat-Pat-Todak Mandal was a Hindu reform organisation in Lahore dedicated to breaking down caste distinctions. They invited Ambedkar to preside over their annual conference in 1936. However, when they read the advance copy of his speech, they found it too radical — particularly his attack on the Shastras — and withdrew the invitation, which is why the speech was never delivered in person.",
+    "ground_truth_content_hints": ["Jat-Pat-Todak", "Mandal", "Lahore"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "historical_context",
+    "difficulty": "easy"
+  },
+  {
+    "question": "How does Ambedkar describe the condition of untouchables under the caste system?",
+    "ground_truth_answer": "Ambedkar describes untouchables as existing outside the fourfold varna system, placed at the very bottom of Hindu society. They are denied basic human dignity, barred from temples, wells, and public spaces, forced into degrading occupations, and treated as impure by the rest of Hindu society. This condition is sanctioned by religious texts.",
+    "ground_truth_content_hints": ["untouchable", "caste", "Hindu"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "untouchability",
+    "difficulty": "easy"
+  },
+  {
+    "question": "What does Ambedkar argue about the priority of social reform versus political reform?",
+    "ground_truth_answer": "Ambedkar argues that social reform must come before or alongside political reform. He criticises Indian nationalists for prioritising political independence while ignoring social inequalities rooted in caste. Political freedom without social equality is meaningless for the oppressed castes who remain slaves within their own society.",
+    "ground_truth_content_hints": ["social reform", "political", "independence"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "reform_strategy",
+    "difficulty": "medium"
+  },
+  {
+    "question": "Why does Ambedkar argue that caste prevents Hindu society from achieving unity and solidarity?",
+    "ground_truth_answer": "Ambedkar argues that caste divides Hindu society into hundreds of watertight compartments with no sense of common brotherhood. Each caste is a separate community with its own rules of endogamy, commensality, and hierarchy. This fragmentation prevents the collective solidarity needed for social or political progress.",
+    "ground_truth_content_hints": ["brotherhood", "solidarity", "division"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "social_unity",
+    "difficulty": "medium"
+  },
+  {
+    "question": "What does Ambedkar say about inter-caste marriage AND the role of education in fighting caste?",
+    "ground_truth_answer": "Ambedkar sees inter-caste marriage as the most powerful tool to break caste endogamy, which is the cornerstone of the caste system. While education can raise consciousness about the evils of caste, it is insufficient alone — structural changes including inter-caste marriage and repudiation of the Shastras are necessary.",
+    "ground_truth_content_hints": ["inter-caste", "marriage", "endogamy"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "edge_case_multi_hop",
+    "difficulty": "hard"
+  },
+  {
+    "question": "How does Ambedkar compare caste-based discrimination in India to class-based discrimination in Europe?",
+    "ground_truth_answer": "Ambedkar distinguishes caste from class by noting that class divisions in Europe are not permanent, hereditary, or religiously sanctioned — people can move between classes. Caste, by contrast, is birth-based, hereditary, religiously ordained, and virtually impossible to escape, making it a far more rigid and oppressive system.",
+    "ground_truth_content_hints": ["caste", "class", "Europe"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "edge_case_comparison",
+    "difficulty": "hard"
+  },
+  {
+    "question": "According to Ambedkar, what is the relationship between caste and economic inequality in India?",
+    "ground_truth_answer": "Ambedkar argues that caste determines occupational hierarchy and economic status. Lower castes are forced into menial, low-paying, and degrading occupations by the caste system. Economic inequality in India is therefore not accidental but structurally embedded in the caste order and sanctioned by religion.",
+    "ground_truth_content_hints": ["caste", "occupation", "labour"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "edge_case_economics",
+    "difficulty": "hard"
+  },
+  {
+    "question": "What does Ambedkar say about the Hindu social order and its attitude toward individual rights?",
+    "ground_truth_answer": "Ambedkar argues that the Hindu social order completely subordinates the individual to the caste community. Individual rights, freedoms, and conscience are suppressed in favour of caste rules and obligations. This is the antithesis of a democratic social order built on individual liberty.",
+    "ground_truth_content_hints": ["Hindu social order", "social order", "abolish"],
+    "expected_route": "document",
+    "has_uploaded_documents": true,
+    "category": "edge_case_rights",
+    "difficulty": "hard"
+  },
+  {
+    "question": "What is the caste census data showing the OBC population in India in 2025?",
+    "ground_truth_answer": null,
+    "ground_truth_content_hints": [],
+    "expected_route": "web",
+    "has_uploaded_documents": true,
+    "category": "out_of_scope_current_events",
+    "difficulty": "easy"
+  },
+  {
+    "question": "Who won the Indian general election in 2024?",
+    "ground_truth_answer": null,
+    "ground_truth_content_hints": [],
+    "expected_route": "web",
+    "has_uploaded_documents": true,
+    "category": "out_of_scope_current_events",
+    "difficulty": "easy"
+  },
+  {
+    "question": "What are the latest Supreme Court rulings on OBC reservations in India?",
+    "ground_truth_answer": null,
+    "ground_truth_content_hints": [],
+    "expected_route": "web",
+    "has_uploaded_documents": true,
+    "category": "out_of_scope_current_events",
+    "difficulty": "easy"
+  },
+  {
+    "question": "What is the current GDP of India in 2025?",
+    "ground_truth_answer": null,
+    "ground_truth_content_hints": [],
+    "expected_route": "web",
+    "has_uploaded_documents": true,
+    "category": "out_of_scope_facts",
+    "difficulty": "easy"
+  },
+  {
+    "question": "What are today's top news headlines about caste discrimination in India?",
+    "ground_truth_answer": null,
+    "ground_truth_content_hints": [],
+    "expected_route": "web",
+    "has_uploaded_documents": true,
+    "category": "out_of_scope_news",
+    "difficulty": "easy"
+  },
+  {
+    "question": "Can you explain photosynthesis to me?",
+    "ground_truth_answer": null,
+    "ground_truth_content_hints": [],
+    "expected_route": "web",
+    "has_uploaded_documents": false,
+    "category": "adversarial_explain_keyword",
+    "difficulty": "medium",
+    "adversarial": true
+  },
+  {
+    "question": "Analyze the stock market trends in India in 2025",
+    "ground_truth_answer": null,
+    "ground_truth_content_hints": [],
+    "expected_route": "web",
+    "has_uploaded_documents": true,
+    "category": "adversarial_analyze_vs_web",
+    "difficulty": "medium",
+    "adversarial": true
+  },
+  {
+    "question": "What is the population of India?",
+    "ground_truth_answer": null,
+    "ground_truth_content_hints": [],
+    "expected_route": "web",
+    "has_uploaded_documents": false,
+    "category": "adversarial_factual_no_doc",
+    "difficulty": "easy",
+    "adversarial": true
+  },
+  {
+    "question": "Hi, how are you?",
+    "ground_truth_answer": null,
+    "ground_truth_content_hints": [],
+    "expected_route": "general",
+    "has_uploaded_documents": true,
+    "category": "chitchat",
+    "difficulty": "easy"
+  },
+  {
+    "question": "Hello! What can you help me with?",
+    "ground_truth_answer": null,
+    "ground_truth_content_hints": [],
+    "expected_route": "general",
+    "has_uploaded_documents": true,
+    "category": "chitchat",
+    "difficulty": "easy"
+  },
+  {
+    "question": "Thanks for your explanation, that was really helpful.",
+    "ground_truth_answer": null,
+    "ground_truth_content_hints": [],
+    "expected_route": "general",
+    "has_uploaded_documents": true,
+    "category": "chitchat",
+    "difficulty": "easy"
+  }
+]
