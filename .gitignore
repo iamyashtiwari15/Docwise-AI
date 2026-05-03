@@ -8,6 +8,8 @@ build/
 venv/
 .venv/
 env/
+# Chunk debug dumps (local quality inspection only)
+backend/chunk_debug/
 .env
 .env.*
 !.env.example

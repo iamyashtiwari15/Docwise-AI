@@ -6,7 +6,7 @@ from functools import lru_cache
 from threading import Event, Lock
 from typing import Dict, List, Optional, Tuple
 
-from agents.document_ingestion import chunk_document_text, extract_text_from_upload
+from agents.document_ingestion import chunk_document_text, extract_text_from_upload, save_chunks_debug
 from agents.llm_loader import get_embedding_model
 from agents.retrieval_utils import (
     extract_query_terms,
@@ -254,7 +254,13 @@ class UploadedDocumentStore:
         if not chunks:
             raise ValueError("The uploaded file does not contain enough text to index.")
 
-        embeddings = self._get_embedding_model().embed_documents([c["content"] for c in chunks])
+        # Save human-readable chunk dump for quality inspection
+        try:
+            save_chunks_debug(chunks, filename)
+        except Exception as _exc:
+            logger.warning("[CHUNK_DEBUG] Could not save debug file: %s", _exc)
+
+        embeddings= self._get_embedding_model().embed_documents([c["content"] for c in chunks])
         stored_chunks = [
             StoredChunk(
                 content=chunk["content"],

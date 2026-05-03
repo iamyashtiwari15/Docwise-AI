@@ -371,3 +371,65 @@ def chunk_document_text(text: str, source_name: str, chunk_size: int | None = No
         chunks.append(_flush_chunk(current_units, source_name, chunk_index))
 
     return chunks
+
+
+# ── Debug / quality-inspection helper ─────────────────────────────────────────
+
+def save_chunks_debug(chunks: List[Dict], source_name: str) -> str:
+    """
+    Write all chunks with their metadata to a human-readable .txt file inside
+    backend/chunk_debug/<source_stem>_<timestamp>/chunks.txt  so you can open
+    the folder and inspect chunking quality without running a query.
+
+    Returns the path of the file that was written.
+    """
+    import datetime
+
+    # Resolve the debug folder relative to this file's location (backend/)
+    backend_dir = Path(__file__).parent.parent
+    debug_root = backend_dir / "chunk_debug"
+
+    safe_stem = re.sub(r"[^\w\-.]", "_", Path(source_name).stem)[:60]
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = debug_root / f"{safe_stem}_{timestamp}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "chunks.txt"
+
+    divider = "═" * 72
+
+    with open(out_path, "w", encoding="utf-8") as fh:
+        fh.write(f"Document : {source_name}\n")
+        fh.write(f"Generated: {datetime.datetime.now().isoformat()}\n")
+        fh.write(f"Chunks   : {len(chunks)}\n")
+        fh.write(f"{divider}\n\n")
+
+        for chunk in chunks:
+            meta = chunk.get("metadata", {})
+            content = chunk.get("content", "")
+            idx = meta.get("chunk_index", "?")
+            fh.write(f"┌─ CHUNK {idx} / {len(chunks)}")
+
+            # Append tags on the header line for quick visual scan
+            tags = []
+            if meta.get("is_table"):
+                tags.append("TABLE")
+            if meta.get("is_image_summary"):
+                tags.append("IMAGE_SUMMARY")
+            if tags:
+                fh.write(f"  [{', '.join(tags)}]")
+            fh.write("\n")
+
+            # Metadata block
+            fh.write("│ Metadata\n")
+            for key, val in sorted(meta.items()):
+                fh.write(f"│   {key:<20} : {val}\n")
+
+            # Content block
+            fh.write("│ Content\n")
+            for line in content.splitlines():
+                fh.write(f"│   {line}\n")
+
+            fh.write(f"└{'─' * 70}\n\n")
+
+    logger.info("[CHUNK_DEBUG] Saved %d chunks → %s", len(chunks), out_path)
+    return str(out_path)
