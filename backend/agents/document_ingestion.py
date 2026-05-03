@@ -3,7 +3,8 @@ from pathlib import Path
 import re
 from typing import Dict, List
 
-from pypdf import PdfReader
+import fitz  # PyMuPDF — installed as part of pymupdf4llm
+import pymupdf4llm
 from docx import Document as DocxDocument
 
 from core.config import get_settings
@@ -24,13 +25,23 @@ def is_document_upload(filename: str | None, content_type: str | None) -> bool:
 
 
 def _extract_pdf_text(file_bytes: bytes) -> str:
-    reader = PdfReader(BytesIO(file_bytes))
+    """
+    Extract text from a PDF using pymupdf4llm which produces LLM-ready markdown,
+    preserving headings, tables, lists and other structure from the original document.
+    Each page is prefixed with a [PAGE X] marker so downstream chunking can record
+    page numbers in chunk metadata.
+    """
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    # page_chunks=True returns one dict per page with "text" and "metadata" keys
+    page_chunks = pymupdf4llm.to_markdown(doc, page_chunks=True)
     pages = []
-    for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
-        if text.strip():
-            # Prefix each page with a marker so downstream chunking can record page numbers
-            pages.append(f"[PAGE {i + 1}]\n{text.strip()}")
+    for chunk in page_chunks:
+        text = (chunk.get("text") or "").strip()
+        if not text:
+            continue
+        # metadata["page"] is 0-indexed
+        page_num = chunk.get("metadata", {}).get("page", 0) + 1
+        pages.append(f"[PAGE {page_num}]\n{text}")
     return "\n\n".join(pages)
 
 
