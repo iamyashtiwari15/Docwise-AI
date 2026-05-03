@@ -1,11 +1,15 @@
 import logging
 from typing import List, Dict, Any, Optional
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from agents.rag_agent.role_llm_loader import get_llm
 
 
 class ResponseGenerator:
     """
     Generates grounded responses based on retrieved document or web context.
+    Chat history is passed as List[BaseMessage] and injected into the LLM via
+    MessagesPlaceholder — each prior turn is a real role-separated message,
+    not serialised text.
     """
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -28,22 +32,13 @@ class ResponseGenerator:
             parts.append(f'<passage id="{i}" relevance="{label}"{page_attr}{source_attr}>\n{text}\n</passage>')
         return "\n\n".join(parts)
 
-    def _build_prompt(
-        self,
-        query: str,
-        context: str,
-        chat_history: Optional[List[Dict[str, str]]] = None
-    ) -> str:
-        history_section = ""
-        if chat_history:
-            turns = "\n".join(
-                f"{msg['role'].capitalize()}: {msg['content']}"
-                for msg in chat_history
-            )
-            history_section = f"<conversation_history>\n{turns}\n</conversation_history>\n\n"
-
+    def _build_prompt(self, query: str, context: str) -> str:
+        """
+        Build the current-turn user prompt containing retrieved context and question.
+        Chat history is NOT embedded here — it is injected as real BaseMessage objects
+        via MessagesPlaceholder in the WrappedLLM chain.
+        """
         return (
-            f"{history_section}"
             f"<context>\n{context}\n</context>\n\n"
             f"<question>\n{query}\n</question>\n\n"
             "Think through this as a teacher preparing a lesson on the question above:\n\n"
@@ -69,7 +64,7 @@ class ResponseGenerator:
         retrieved_docs: List[Dict[str, Any]],
         query_classification: Optional[Any] = None,
         picture_paths: Optional[List[str]] = None,
-        chat_history: Optional[List[Dict[str, str]]] = None
+        chat_history: Optional[List[BaseMessage]] = None,
     ) -> Dict[str, Any]:
         try:
             self.logger.info(f"[LOG] Starting LLM response generation for query: {query}")
@@ -90,10 +85,12 @@ class ResponseGenerator:
             doc_texts_with_scores.sort(key=lambda x: x[1], reverse=True)
 
             context = self._format_context(doc_texts_with_scores)
-            prompt = self._build_prompt(query, context, chat_history)
+            prompt = self._build_prompt(query, context)
             self.logger.debug("[LOG] Prompt sent to LLM: %s", prompt)
 
-            result = self.llm.invoke(prompt)
+            # Pass history as real BaseMessage objects — the WrappedLLM injects them
+            # via MessagesPlaceholder so the model sees proper role-separated turns.
+            result = self.llm.invoke(prompt, history=chat_history)
             response_text = result.content.strip() if result and hasattr(result, "content") else None
             self.logger.info(f"[LOG] Raw LLM response: {response_text}")
 
@@ -104,7 +101,6 @@ class ResponseGenerator:
                     "sources": [],
                     "confidence": 0.0,
                 }
-            # Detect the sentinel token (or any LLM paraphrase of it)
             if "INSUFFICIENT_INFORMATION" in response_text or (
                 "Insufficient Information" in response_text and len(response_text) < 200
             ):

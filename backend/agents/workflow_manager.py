@@ -2,6 +2,8 @@ import logging
 import time
 from typing import TypedDict, Optional, Dict, Any, List
 
+from langchain_core.messages import BaseMessage
+
 
 class WorkflowResponse(TypedDict, total=False):
     response: str
@@ -67,7 +69,7 @@ class WorkflowManager:
                     break
         return top_score
 
-    def _generate_response(self, query: str, docs: List[Dict[str, Any]], chat_history: Optional[List[Dict[str, str]]]) -> WorkflowResponse:
+    def _generate_response(self, query: str, docs: List[Dict[str, Any]], chat_history: Optional[List[BaseMessage]]) -> WorkflowResponse:
         t0 = time.perf_counter()
         logger.debug("[LLM] Starting response generation | docs=%d", len(docs))
         try:
@@ -91,7 +93,7 @@ class WorkflowManager:
         self,
         query: str,
         image_path: Optional[str] = None,
-        chat_history: Optional[List[Dict[str, str]]] = None,
+        chat_history: Optional[List[BaseMessage]] = None,
         image_context: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> WorkflowResponse:

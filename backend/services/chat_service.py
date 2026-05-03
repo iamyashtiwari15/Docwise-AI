@@ -1,4 +1,3 @@
-import ast
 import logging
 import os
 import time
@@ -9,47 +8,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from agents.document_ingestion import is_document_upload
 from agents.uploaded_document_store import uploaded_document_store
-from services.session_store import session_store
 
 logger = logging.getLogger(__name__)
-
-
-def convert_history(messages: list[BaseMessage]) -> list[dict[str, str]]:
-    history = []
-    for message in messages:
-        if hasattr(message, "type") and hasattr(message, "content"):
-            role = "user" if message.type == "human" else "assistant"
-            history.append({"role": role, "content": str(message.content)})
-    return history
-
-
-def _normalize_message(message: BaseMessage) -> BaseMessage:
-    if not hasattr(message, "type") or not hasattr(message, "content"):
-        return message
-
-    if message.type != "ai":
-        return message
-
-    content = message.content
-    if isinstance(content, dict) and "response" in content:
-        return AIMessage(content=content["response"])
-
-    if isinstance(content, str) and content.strip().startswith("{"):
-        try:
-            import json
-
-            payload = json.loads(content)
-            if isinstance(payload, dict) and "response" in payload:
-                return AIMessage(content=payload["response"])
-        except Exception:
-            try:
-                payload = ast.literal_eval(content)
-                if isinstance(payload, dict) and "response" in payload:
-                    return AIMessage(content=payload["response"])
-            except Exception:
-                pass
-
-    return message
 
 
 def _extract_response_payload(agent_output: dict[str, Any]) -> dict[str, Any]:
@@ -71,6 +31,23 @@ def _extract_response_payload(agent_output: dict[str, Any]) -> dict[str, Any]:
 
 
 class ChatService:
+    def _graph_config(self, session_id: str) -> dict:
+        """LangGraph run config — identifies the thread so InMemorySaver restores state."""
+        return {"configurable": {"thread_id": session_id}}
+
+    def _prior_messages(self, session_id: str) -> list[BaseMessage]:
+        """Read the accumulated message history from the checkpointer before this turn."""
+        from agents.agent_decision import assistant_graph
+        state = assistant_graph.get_state(self._graph_config(session_id))
+        if state and state.values:
+            return list(state.values.get("messages", []))
+        return []
+
+    def _append_to_graph(self, session_id: str, message: BaseMessage) -> None:
+        """Inject a message into the checkpointed graph state outside of a graph run."""
+        from agents.agent_decision import assistant_graph
+        assistant_graph.update_state(self._graph_config(session_id), {"messages": [message]})
+
     def _invoke_agent_graph(
         self,
         user_input: Optional[str],
@@ -78,12 +55,17 @@ class ChatService:
         image_bytes: Optional[bytes] = None,
         image_type: Optional[str] = None,
     ) -> dict[str, Any]:
-        messages = session_store.get_messages(session_id)
-        chat_history = convert_history(messages)
+        from agents.agent_decision import assistant_graph
+
+        # Snapshot history before this turn — used by retrieval & query rewriter
+        chat_history = self._prior_messages(session_id)
         input_type = "image" if image_bytes else "text"
         image_path = None
 
-        logger.debug("[GRAPH] Invoking agent graph | session=%s | input_type=%s | history_len=%d", session_id, input_type, len(messages))
+        logger.debug(
+            "[GRAPH] Invoking agent graph | session=%s | input_type=%s | history_len=%d",
+            session_id, input_type, len(chat_history),
+        )
 
         if image_bytes and image_type:
             extension = image_type.split("/")[-1]
@@ -91,8 +73,11 @@ class ChatService:
             with open(image_path, "wb") as file_handle:
                 file_handle.write(image_bytes)
 
+        # Pass only the NEW HumanMessage in "messages" — the add_messages reducer
+        # in GraphState appends it to the checkpointer's accumulated history.
+        new_messages: list[BaseMessage] = []
         if user_input:
-            messages.append(HumanMessage(content=user_input))
+            new_messages.append(HumanMessage(content=user_input))
 
         input_state = {
             "input": user_input or "",
@@ -101,20 +86,18 @@ class ChatService:
             "image_path": image_path,
             "image_type": image_type or "",
             "input_type": input_type,
-            "agent_name": "",
+            "agent_name": "",        # reset transient fields each turn
             "response": "",
             "workflow_response": {},
             "involved_agents": [],
             "bypass_guardrails": False,
-            "messages": messages,
-            "chat_history": chat_history,
+            "messages": new_messages,
+            "chat_history": chat_history,  # prior turns as List[BaseMessage]
         }
 
         t0 = time.perf_counter()
         try:
-            from agents.agent_decision import assistant_graph
-
-            output = assistant_graph.invoke(input_state)
+            output = assistant_graph.invoke(input_state, self._graph_config(session_id))
         finally:
             if image_path and os.path.exists(image_path):
                 os.remove(image_path)
@@ -122,10 +105,10 @@ class ChatService:
         latency_ms = (time.perf_counter() - t0) * 1000
         agents_used = output.get("involved_agents", [])
         route = output.get("workflow_response", {}).get("query_type", "unknown")
-        logger.info("[GRAPH] Completed | session=%s | agents=%s | route=%s | latency=%.0fms", session_id, agents_used, route, latency_ms)
-
-        normalized_messages = [_normalize_message(message) for message in output.get("messages", messages)]
-        session_store.set_messages(session_id, normalized_messages)
+        logger.info(
+            "[GRAPH] Completed | session=%s | agents=%s | route=%s | latency=%.0fms",
+            session_id, agents_used, route, latency_ms,
+        )
         return output
 
     def process_text_message(self, session_id: str, message: str) -> dict[str, Any]:
@@ -151,7 +134,7 @@ class ChatService:
         logger.info("[INGEST] Background ingestion started | session=%s | filename=%s", session_id, filename)
         try:
             result = uploaded_document_store.add_file(session_id, filename, file_bytes, content_type)
-            session_store.append_message(session_id, HumanMessage(content=f"[Uploaded file: {filename}]"))
+            self._append_to_graph(session_id, HumanMessage(content=f"[Uploaded file: {filename}]"))
             ingestion_tracker.finish(session_id, filename, result["chunk_count"])
             logger.info(
                 "[INGEST] Done | session=%s | filename=%s | chunks=%d",
@@ -197,7 +180,7 @@ class ChatService:
                 try:
                     result = uploaded_document_store.add_file(session_id, filename, file_bytes, content_type)
                     chunk_count = result["chunk_count"]
-                    session_store.append_message(session_id, HumanMessage(content=f"[Uploaded file: {filename}]"))
+                    self._append_to_graph(session_id, HumanMessage(content=f"[Uploaded file: {filename}]"))
                     ingestion_tracker.finish(session_id, filename, chunk_count)
                 except Exception as exc:
                     ingestion_tracker.fail(session_id, filename, str(exc))
@@ -213,15 +196,21 @@ class ChatService:
                 f"Uploaded **{filename}** and indexed {chunk_count} chunks. "
                 "You can now ask questions about the uploaded document."
             )
-            session_store.append_message(session_id, AIMessage(content=response_text))
+            self._append_to_graph(session_id, AIMessage(content=response_text))
             return {"response": response_text, "sources": [], "confidence": 1.0, "query_type": "document"}
 
         return self.process_image_message(session_id, message, file_bytes, content_type)
 
     def get_history(self, session_id: str) -> dict[str, Any]:
-        messages = session_store.get_messages(session_id)
+        messages = self._prior_messages(session_id)
+        # Serialise BaseMessage objects to dicts for the API response
+        history = [
+            {"role": "user" if msg.type == "human" else "assistant", "content": str(msg.content)}
+            for msg in messages
+            if hasattr(msg, "type") and hasattr(msg, "content")
+        ]
         return {
-            "history": convert_history(messages),
+            "history": history,
             "uploaded_files": uploaded_document_store.list_files(session_id),
         }
 

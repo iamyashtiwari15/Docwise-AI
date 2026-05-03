@@ -1,17 +1,14 @@
+from typing import List
+from langchain_core.messages import BaseMessage, HumanMessage
 from agents.rag_agent.role_llm_loader import get_llm
 
 
 class AdvancedQueryMerger:
     @staticmethod
-    def merge(current_query, chat_history, max_history=4):
+    def merge(current_query: str, chat_history: List[BaseMessage], max_history: int = 4) -> str:
         """
-        Merge follow-up questions with recent history only when needed.
-        Args:
-            current_query (str): The latest user query.
-            chat_history (list): List of previous exchanges (dicts with 'role' and 'content').
-            max_history (int): Number of previous turns to include.
-        Returns:
-            str: Rewritten, self-contained query string.
+        Rewrite a follow-up question into a self-contained query using prior turns.
+        chat_history is a list of BaseMessage objects (HumanMessage / AIMessage).
         """
         current_query = (current_query or "").strip()
         if not current_query:
@@ -27,7 +24,7 @@ class AdvancedQueryMerger:
             return current_query
 
         last_user_message = next(
-            (msg["content"] for msg in reversed(relevant_history) if msg.get("role") == "user"),
+            (msg.content for msg in reversed(relevant_history) if isinstance(msg, HumanMessage)),
             "",
         )
         if not last_user_message:
@@ -36,7 +33,10 @@ class AdvancedQueryMerger:
         if len(current_query.split()) <= 6:
             return f"{current_query}\n\nRelated context: {last_user_message}"
 
-        history_str = "\n".join([f"{msg['role'].capitalize()}: {msg['content']}" for msg in relevant_history])
+        history_str = "\n".join([
+            f"{'User' if isinstance(msg, HumanMessage) else 'Assistant'}: {msg.content}"
+            for msg in relevant_history
+        ])
         prompt = f"""
 Given the following chat history and the user's latest query, rewrite the query as a self-contained, contextually complete question. If the query is already self-contained, return it as is.
 

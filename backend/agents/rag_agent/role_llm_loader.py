@@ -3,11 +3,12 @@
 
 import os
 from functools import lru_cache
+from typing import List, Optional
 
 from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
-from langchain_core.messages import SystemMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import SystemMessage, BaseMessage
 from dotenv import load_dotenv
 
 from agents.llm_loader import get_embedding_model as get_shared_embedding_model
@@ -19,9 +20,11 @@ load_dotenv()
 def get_llm(role: str = "default"):
     """
     Loads the LLM with specific system prompts based on role.
-    
-    Args:
-        role: Role for the LLM (default, planner, validator, etc.)
+    Returns a WrappedLLM whose .invoke(prompt, history) accepts:
+      - prompt: str  — the current-turn user text (may include retrieved context)
+      - history: List[BaseMessage] | None — prior conversation turns injected via
+        MessagesPlaceholder so the model sees them as real role-separated messages,
+        not as serialised text.
     """
     groq_api_key = os.getenv("GROQ_API_KEY")
     model_name = os.getenv("LLM_MODEL_NAME", "llama-3.3-70b-versatile")
@@ -91,31 +94,37 @@ def get_llm(role: str = "default"):
             "Do not change the meaning. Return only the rewritten question, nothing else."
         ),
     }
-    
-    llm = get_base_llm(model_name=model_name)
-    
-    # Create a wrapped version that includes the system prompt in each call
+
+    base_llm = get_base_llm(model_name=model_name)
     system_prompt = system_prompts.get(role, system_prompts["default"])
-    
+
+    # Build a ChatPromptTemplate with a MessagesPlaceholder for prior history.
+    # This means the model receives prior turns as real HumanMessage / AIMessage
+    # objects (role-separated) rather than serialised text in the user turn.
+    chain = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        MessagesPlaceholder(variable_name="history", optional=True),
+        ("human", "{input}"),
+    ]) | base_llm
+
     class WrappedLLM:
-        def __init__(self, base_llm, system_prompt):
-            self.base_llm = base_llm
-            self.system_prompt = system_prompt
-            
-        def invoke(self, prompt: str):
-            # Create a chat template that includes the system prompt
-            chat_template = ChatPromptTemplate.from_messages([
-                SystemMessage(content=self.system_prompt),
-                HumanMessagePromptTemplate.from_template("{input}")
-            ])
-            
-            # Format the messages with the actual prompt
-            messages = chat_template.format_messages(input=prompt)
-            
-            # Invoke the base LLM with the formatted messages
-            return self.base_llm.invoke(messages)
-    
-    return WrappedLLM(llm, system_prompt)
+        def __init__(self, _chain):
+            self._chain = _chain
+
+        def invoke(self, prompt: str, history: Optional[List[BaseMessage]] = None):
+            """
+            Invoke the LLM with the current prompt and optional prior-turn messages.
+            history is injected via MessagesPlaceholder — the model sees them as
+            separate role-labelled turns, not concatenated text.
+            """
+            return self._chain.invoke({
+                "input": prompt,
+                "history": history or [],
+            })
+
+    return WrappedLLM(chain)
+
+
 class NamedHuggingFaceEmbeddings(HuggingFaceEmbeddings):
     def name(self):
         return "sentence-transformers/all-MiniLM-L6-v2"

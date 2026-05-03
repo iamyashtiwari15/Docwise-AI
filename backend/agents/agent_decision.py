@@ -2,11 +2,15 @@ import logging
 import os
 import time
 import uuid
-from agents.vision_agents.image_analysis_agent import analyze_image
-from typing import TypedDict, Literal, Optional, List, Dict
+from typing import TypedDict, Literal, Optional, List, Annotated
+
 from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
+
 from agents.llm_loader import get_llm
+from agents.vision_agents.image_analysis_agent import analyze_image
 from agents.workflow_manager import WorkflowManager
 from agents.guardrails import LocalGuardrails
 
@@ -14,6 +18,7 @@ logger = logging.getLogger(__name__)
 llm = get_llm()
 manager = WorkflowManager("agents/rag_agent/rag_db")
 guard = LocalGuardrails(llm)
+
 
 class GraphState(TypedDict):
     input: str
@@ -26,8 +31,12 @@ class GraphState(TypedDict):
     involved_agents: List[str]
     input_type: Literal["text", "image", "text_with_image"]
     bypass_guardrails: bool
-    messages: List[BaseMessage]
-    chat_history: Optional[List[dict]]
+    # Annotated with add_messages reducer so LangGraph accumulates turns
+    # across invocations via the InMemorySaver checkpointer.
+    messages: Annotated[List[BaseMessage], add_messages]
+    # Snapshot of prior messages passed into workflow for retrieval context.
+    # Reset fresh each invocation — not accumulated by the checkpointer.
+    chat_history: Optional[List[BaseMessage]]
 
 def guardrails_node(state: GraphState):
     if state["input_type"] != "text":
@@ -42,7 +51,7 @@ def guardrails_node(state: GraphState):
             "agent_name": "GUARDRAILS_BLOCK",
             "response": {"response": result.content, "sources": [], "confidence": 1.0},
             "involved_agents": state.get("involved_agents", []) + ["GUARDRAILS_BLOCK"],
-            "messages": state.get("messages", []) + [AIMessage(content=result.content)],
+            "messages": [AIMessage(content=result.content)],  # delta only — add_messages appends
         }
     logger.debug("[GUARDRAILS] Passed | session=%s", state.get("session_id"))
     return {**state, "bypass_guardrails": True}
@@ -138,12 +147,11 @@ def call_agent(state: GraphState):
         logger.info("[CALL_AGENT] CONVERSATION_AGENT responded | latency=%.0fms", (time.perf_counter() - t0) * 1000)
         workflow_response["response"] = ai_message.content
         updated_agents = state.get("involved_agents", []) + [agent_name]
-        messages = state["messages"] + [ai_message]
         return {
             **state,
             "response": workflow_response,
             "involved_agents": updated_agents,
-            "messages": messages,
+            "messages": [ai_message],  # delta only — add_messages appends
         }
 
     if image_context and "❌" in image_context:
@@ -151,14 +159,13 @@ def call_agent(state: GraphState):
         workflow_response["response"] = f"{image_context}\n\nRegarding your text query: {original_response}"
 
     logger.info("[CALL_AGENT] %s completed | session=%s", agent_name, state.get("session_id"))
-    messages = state["messages"] + [AIMessage(content=workflow_response.get("response", ""))]
+    ai_reply = AIMessage(content=workflow_response.get("response", ""))
     updated_agents = state.get("involved_agents", []) + [agent_name]
-
     return {
         **state,
         "response": workflow_response,
         "involved_agents": updated_agents,
-        "messages": messages,
+        "messages": [ai_reply],  # delta only — add_messages appends
     }
 
 # --- Correct Graph Building with Conditional Edges ---
@@ -197,6 +204,7 @@ def build_assistant_graph():
         }
     )
 
-    return builder.compile()
+    return builder.compile(checkpointer=InMemorySaver())
+
 
 assistant_graph = build_assistant_graph()
