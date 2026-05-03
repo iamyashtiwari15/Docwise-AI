@@ -51,7 +51,7 @@ class NamedHuggingFaceEmbeddings(HuggingFaceEmbeddings):
 
         # Harrier-style: use SentenceTransformer's built-in prompt_name for queries only
         if self._query_prompt_name:
-            embedding = self.client.encode(
+            embedding = self._client.encode(
                 [text],
                 normalize_embeddings=True,
                 prompt_name=self._query_prompt_name,
@@ -73,9 +73,6 @@ def get_embedding_model():
     device = settings.embedding_device
 
     model_kwargs: dict = {"device": device}
-    # Decoder-only models (harrier) run faster in bf16/fp16 on CUDA
-    if device == "cuda":
-        model_kwargs["torch_dtype"] = "auto"
 
     model = NamedHuggingFaceEmbeddings(
         model_name=model_name,

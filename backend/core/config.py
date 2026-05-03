@@ -1,79 +1,90 @@
 import os
-from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
+from typing import List
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Resolve .env path relative to this file (backend/core/ → project root)
+_ENV_FILE = Path(__file__).parent.parent.parent / ".env"
 
 
-def _split_csv(value: str | None, default: list[str]) -> list[str]:
-    if not value:
-        return default
-    return [item.strip() for item in value.split(",") if item.strip()]
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
+    # API
+    api_prefix: str = "/api"
+    cors_origins: List[str] = Field(
+        default=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:4173",
+            "http://127.0.0.1:4173",
+        ]
+    )
 
-def _env_flag(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    # LLM
+    llm_model_name: str = "llama-3.3-70b-versatile"
 
+    # Embedding
+    embedding_model_name: str = "microsoft/harrier-oss-v1-270m"
+    embedding_device: str = "cpu"
 
-@dataclass(frozen=True)
-class Settings:
-    api_prefix: str
-    cors_origins: list[str]
-    llm_model_name: str
-    embedding_model_name: str
-    embedding_device: str
-    session_max_messages: int
-    document_relevance_threshold: float
-    web_search_max_results: int
-    log_level: str
-    rag_top_k: int
-    rag_candidate_k: int
-    rag_max_query_variants: int
-    document_chunk_size: int
-    document_chunk_overlap: int
-    enable_multi_query_retrieval: bool
-    enable_llm_multi_query: bool
-    enable_lightweight_rerank: bool
-    llm_multi_query_min_terms: int
-    # accuracy-first additions
-    enable_cross_encoder_rerank: bool
-    cross_encoder_model_name: str
-    enable_hyde: bool
-    rag_window_size: int
+    # Session
+    session_max_messages: int = 30
+
+    # RAG retrieval
+    document_relevance_threshold: float = 0.30
+    rag_top_k: int = 6
+    rag_candidate_k: int = 20
+    rag_max_query_variants: int = 5
+    rag_window_size: int = 1
+
+    # Chunking
+    document_chunk_size: int = 512
+    document_chunk_overlap: int = 100
+
+    # Feature flags
+    enable_multi_query_retrieval: bool = True
+    enable_llm_multi_query: bool = True
+    enable_lightweight_rerank: bool = True
+    enable_cross_encoder_rerank: bool = True
+    enable_hyde: bool = True
+
+    # Reranker
+    cross_encoder_model_name: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
+    llm_multi_query_min_terms: int = 5
+
+    # Web search
+    web_search_max_results: int = 3
+
+    # Logging
+    log_level: str = "INFO"
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        """Accept comma-separated string from env or a list."""
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
+    @field_validator("embedding_device", mode="before")
+    @classmethod
+    def validate_device(cls, v):
+        allowed = {"cpu", "cuda", "mps"}
+        v = str(v).strip().lower()
+        if v not in allowed:
+            raise ValueError(f"embedding_device must be one of {allowed}, got '{v}'")
+        return v
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings(
-        api_prefix=os.getenv("API_PREFIX", "/api"),
-        cors_origins=_split_csv(
-            os.getenv("CORS_ORIGINS"),
-            [
-                "http://localhost:5173",
-                "http://127.0.0.1:5173",
-                "http://localhost:4173",
-                "http://127.0.0.1:4173",
-            ],
-        ),
-        llm_model_name=os.getenv("LLM_MODEL_NAME", "llama-3.3-70b-versatile"),
-        embedding_model_name=os.getenv("EMBEDDING_MODEL_NAME", "microsoft/harrier-oss-v1-270m"),
-        embedding_device=os.getenv("EMBEDDING_DEVICE", "cpu"),
-        session_max_messages=int(os.getenv("SESSION_MAX_MESSAGES", "30")),
-        document_relevance_threshold=float(os.getenv("DOCUMENT_RELEVANCE_THRESHOLD", "0.30")),
-        web_search_max_results=int(os.getenv("WEB_SEARCH_MAX_RESULTS", "3")),
-        log_level=os.getenv("LOG_LEVEL", "INFO"),
-        rag_top_k=int(os.getenv("RAG_TOP_K", "6")),
-        rag_candidate_k=int(os.getenv("RAG_CANDIDATE_K", "20")),
-        rag_max_query_variants=int(os.getenv("RAG_MAX_QUERY_VARIANTS", "5")),
-        document_chunk_size=int(os.getenv("DOCUMENT_CHUNK_SIZE", "512")),
-        document_chunk_overlap=int(os.getenv("DOCUMENT_CHUNK_OVERLAP", "100")),
-        enable_multi_query_retrieval=_env_flag("ENABLE_MULTI_QUERY_RETRIEVAL", True),
-        enable_llm_multi_query=_env_flag("ENABLE_LLM_MULTI_QUERY", True),
-        enable_lightweight_rerank=_env_flag("ENABLE_LIGHTWEIGHT_RERANK", True),
-        llm_multi_query_min_terms=int(os.getenv("LLM_MULTI_QUERY_MIN_TERMS", "5")),
-        enable_cross_encoder_rerank=_env_flag("ENABLE_CROSS_ENCODER_RERANK", True),
-        cross_encoder_model_name=os.getenv("CROSS_ENCODER_MODEL_NAME", "cross-encoder/ms-marco-MiniLM-L-12-v2"),
-        enable_hyde=_env_flag("ENABLE_HYDE", True),
-        rag_window_size=int(os.getenv("RAG_WINDOW_SIZE", "1")),
-    )
+    return Settings()
