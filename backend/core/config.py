@@ -40,15 +40,15 @@ class Settings(BaseSettings):
     session_max_messages: int = 30
 
     # RAG retrieval
-    document_relevance_threshold: float = 0.30
+    document_relevance_threshold: float = 0.20
     rag_top_k: int = 6
-    rag_candidate_k: int = 20
+    rag_candidate_k: int = 50
     rag_max_query_variants: int = 5
-    rag_window_size: int = 1
+    rag_window_size: int = 2
 
     # Chunking
-    document_chunk_size: int = 512
-    document_chunk_overlap: int = 100
+    document_chunk_size: int = 1200
+    document_chunk_overlap: int = 300
 
     # Feature flags
     enable_multi_query_retrieval: bool = True
