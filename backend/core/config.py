@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     cross_encoder_model_name: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
     llm_multi_query_min_terms: int = 5
 
+    # Vision (for describing embedded images in uploaded documents)
+    vision_model_name: str = "llama-3.2-11b-vision-preview"
+
     # Web search
     web_search_max_results: int = 3
 
