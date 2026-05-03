@@ -33,35 +33,59 @@ def get_llm(model_name: str | None = None):
     return llm
 
 class NamedHuggingFaceEmbeddings(HuggingFaceEmbeddings):
-    """HuggingFaceEmbeddings with an optional query-time instruction prefix (for BGE models)."""
+    """
+    HuggingFaceEmbeddings with optional query-time instruction.
+    - BGE models: prefix the query text with an instruction string.
+    - Harrier / SentenceTransformer prompt_name models: pass prompt_name to encode().
+    """
     _query_instruction: str = ""
+    _query_prompt_name: str = ""
 
     def name(self):
         return self.model_name
 
     def embed_query(self, text: str) -> list:
-        prefixed = f"{self._query_instruction}{text}" if self._query_instruction else text
-        return super().embed_query(prefixed)
+        # BGE-style: prepend instruction text before encoding
+        if self._query_instruction:
+            text = f"{self._query_instruction}{text}"
+
+        # Harrier-style: use SentenceTransformer's built-in prompt_name for queries only
+        if self._query_prompt_name:
+            embedding = self.client.encode(
+                [text],
+                normalize_embeddings=True,
+                prompt_name=self._query_prompt_name,
+            )
+            return embedding[0].tolist()
+
+        return super().embed_query(text)
 
 
 @lru_cache(maxsize=1)
 def get_embedding_model():
     """
-    Loads the sentence embedding model. For BGE-family models the query instruction
-    is injected at embed_query time (not as a constructor arg — Pydantic forbids extras).
+    Loads the sentence embedding model.
+    - Harrier (Microsoft): decoder-only, uses prompt_name="web_search_query" for queries.
+    - BGE: query instruction prefix injected at embed_query time.
     """
     settings = get_settings()
     model_name = settings.embedding_model_name
     device = settings.embedding_device
 
+    model_kwargs: dict = {"device": device}
+    # Decoder-only models (harrier) run faster in bf16/fp16 on CUDA
+    if device == "cuda":
+        model_kwargs["torch_dtype"] = "auto"
+
     model = NamedHuggingFaceEmbeddings(
         model_name=model_name,
-        model_kwargs={"device": device},
+        model_kwargs=model_kwargs,
         encode_kwargs={"normalize_embeddings": True},
     )
 
-    # BGE models require a query-side instruction prefix for asymmetric retrieval quality
-    if "bge" in model_name.lower():
+    if "harrier" in model_name.lower():
+        model._query_prompt_name = "web_search_query"
+    elif "bge" in model_name.lower():
         model._query_instruction = "Represent this sentence for searching relevant passages: "
 
     return model

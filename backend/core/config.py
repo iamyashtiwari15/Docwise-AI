@@ -57,7 +57,7 @@ def get_settings() -> Settings:
             ],
         ),
         llm_model_name=os.getenv("LLM_MODEL_NAME", "llama-3.3-70b-versatile"),
-        embedding_model_name=os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-large-en-v1.5"),
+        embedding_model_name=os.getenv("EMBEDDING_MODEL_NAME", "microsoft/harrier-oss-v1-270m"),
         embedding_device=os.getenv("EMBEDDING_DEVICE", "cpu"),
         session_max_messages=int(os.getenv("SESSION_MAX_MESSAGES", "30")),
         document_relevance_threshold=float(os.getenv("DOCUMENT_RELEVANCE_THRESHOLD", "0.30")),
