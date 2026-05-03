@@ -6,7 +6,6 @@ DocWise AI is a document-first assistant with a FastAPI backend, a LangGraph orc
 
 - Full end-to-end project guide: [PROJECT_DOCUMENTATION.md](PROJECT_DOCUMENTATION.md)
 - RAG deep dive: [RAG_ALGORITHM_DETAILS.md](RAG_ALGORITHM_DETAILS.md)
-- Architecture improvement proposal: [IMPLEMENTATION_APPROVAL.md](IMPLEMENTATION_APPROVAL.md) (proposal only, not the live runtime contract)
 
 ## Key Features
 

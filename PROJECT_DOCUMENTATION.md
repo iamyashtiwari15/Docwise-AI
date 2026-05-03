@@ -54,7 +54,6 @@ The actual runtime code lives under `backend/` and `frontend/`.
 | `README.md` | Quick-start and high-level overview |
 | `PROJECT_DOCUMENTATION.md` | This end-to-end implementation guide |
 | `RAG_ALGORITHM_DETAILS.md` | Specialized RAG design notes |
-| `IMPLEMENTATION_APPROVAL.md` | Proposal document for possible future refactors |
 
 ### Important backend runtime files
 
@@ -107,7 +106,7 @@ flowchart TD
 The main runtime loop is:
 
 1. The frontend creates or reuses a browser `session_id`.
-2. The user sends a text prompt or a file upload.
+2. The user types a message, attaches a file, or does both.
 3. FastAPI forwards the request to `ChatService`.
 4. `ChatService` invokes the LangGraph workflow using `session_id` as the graph thread ID.
 5. The graph applies guardrails, handles image context if needed, and asks `WorkflowManager` to route the query.
@@ -117,6 +116,45 @@ The main runtime loop is:
    - general chat
 7. The response is returned to the frontend and rendered as markdown.
 
+### 5.1 Detailed document attachment timeline
+
+When a document is attached in the UI, work starts before the user presses Send.
+
+1. `frontend/src/App.jsx` stores the selected document in local React state and shows a file preview.
+2. The frontend immediately sends multipart form data to `/api/ingest` with `session_id` and the file.
+3. `/api/ingest` calls `ingestion_tracker.start(session_id, filename)`.
+4. If that file is already being tracked for the same session, the route returns `already_indexed` and does not schedule duplicate work.
+5. Otherwise, FastAPI schedules `chat_service.ingest_document_background(...)` as a background task and returns `202` immediately.
+6. The background worker calls `uploaded_document_store.add_file(...)`, which performs the real indexing pipeline:
+    - extract text from PDF, DOCX, or TXT
+    - chunk the extracted text
+    - write a chunk-debug text file
+    - embed every chunk
+    - store chunk text, metadata, embeddings, lexical terms, and filename under the current session
+    - mark the BM25 cache dirty so it will be rebuilt lazily on retrieval
+7. After indexing succeeds, the backend appends a synthetic `[Uploaded file: filename]` `HumanMessage` into LangGraph history so the upload appears in restored conversation state.
+8. The ingestion tracker is then marked `DONE` with the indexed chunk count.
+
+### 5.2 What happens when the user finally presses Send
+
+The send-time behavior depends on the file type and whether background indexing already finished.
+
+For document uploads:
+
+1. The frontend sends the file and optional message to `/api/upload`.
+2. `ChatService.process_upload(...)` checks the ingestion tracker for `(session_id, filename)`.
+3. If the status is `DONE`, the backend skips re-ingestion.
+4. If the status is `PENDING`, the backend waits up to 120 seconds for the background job to finish.
+5. If there is no status, which can happen for direct API callers that never used `/api/ingest`, the backend performs synchronous ingestion inside `/api/upload`.
+6. If a message was included, the backend immediately continues into the normal text graph flow after the document is ready.
+7. If no message was included, the backend returns a document-upload confirmation containing the indexed chunk count.
+
+For image uploads:
+
+1. The frontend does not call `/api/ingest` when the user merely selects an image.
+2. The image is only sent on `/api/upload` when the user submits.
+3. The backend routes the image through OCR and image summarization, not through document chunking and embedding.
+
 ## 6. API Layer and Route Surface
 
 All current endpoints are defined in `backend/api/routes/chat.py` and use the API prefix from `backend/core/config.py`, which defaults to `/api`.
@@ -125,15 +163,15 @@ All current endpoints are defined in `backend/api/routes/chat.py` and use the AP
 |---|---|---|---|---|
 | `/api/health` | `GET` | none | `{status: "ok"}` | Liveness check |
 | `/api/history` | `POST` | JSON body with `session_id` | `history` + `uploaded_files` | Restore session state in the UI |
-| `/api/ingest` | `POST` | multipart form with `file` and `session_id` | `IngestResponse` with `202` | Start background document indexing as soon as a file is selected |
+| `/api/ingest` | `POST` | multipart form with `file` and `session_id` | `IngestResponse` with `202` | Start background text extraction, chunking, embedding, and session indexing as soon as a document is selected |
 | `/api/chat` | `POST` | multipart form with `message` and `session_id` | `ChatResponse` | Text-only prompt path |
-| `/api/upload` | `POST` | multipart form with `file`, `session_id`, optional `message` | `ChatResponse` | File upload path for documents and images |
+| `/api/upload` | `POST` | multipart form with `file`, `session_id`, optional `message` | `ChatResponse` | File submit path that either reconciles document ingestion state or runs the image-analysis flow |
 
 ### Response schemas
 
 - `ChatResponse` returns `response`, `sources`, `confidence`, and `query_type`.
 - `HistoryResponse` returns serialized message history and the list of uploaded file names for the session.
-- `IngestResponse` returns ingestion status such as `indexing` or `already_indexed`.
+- `IngestResponse` returns ingestion status such as `indexing` or `already_indexed`, but the actual heavy indexing work continues after the `202` response in a background task.
 
 ## 7. Routing Model
 
@@ -249,7 +287,8 @@ These are the most important behavioral rules in the system.
 When a user selects a document in the frontend:
 
 - the frontend immediately calls `/api/ingest`
-- the backend starts chunking and embedding in a background task
+- the backend starts extraction, chunking, debug-dump writing, and embedding in a background task
+- the document is indexed into the per-session in-memory store before the user has to ask the actual question
 - when the user later sends the actual message, `/api/upload` can skip redundant ingestion or wait for the pending job
 
 This improves perceived responsiveness because indexing starts before the user presses Send.
@@ -263,6 +302,9 @@ That allows the upload flow to:
 - avoid re-indexing the same file repeatedly
 - wait up to 120 seconds for background indexing when it is already in progress
 - return a clear indexing error if background ingestion fails
+- support direct API callers that skip `/api/ingest` by falling back to synchronous ingestion in `/api/upload`
+
+After successful document ingestion, `ChatService` appends a synthetic upload message into LangGraph state. If the user submitted only a file and no text, the backend returns a confirmation like `Uploaded **filename** and indexed X chunks. You can now ask questions about the uploaded document.`
 
 ### 9.3 Follow-up query handling
 
@@ -368,11 +410,19 @@ The active store is `UploadedDocumentStore` in `backend/agents/uploaded_document
 
 Important implementation facts:
 
+- `add_file(...)` runs `extract_text_from_upload(...)`, `chunk_document_text(...)`, `save_chunks_debug(...)`, and `embed_documents(...)` in that order
 - chunks are stored in memory, keyed by `session_id`
 - embeddings are generated once per chunk on ingestion
 - chunk terms are precomputed for BM25 and lexical overlap logic
 - BM25 indexes are cached per session and rebuilt lazily when new documents are added
 - uploaded file names are tracked separately per session for frontend display
+
+Internally, each stored item keeps:
+
+- chunk content
+- chunk metadata
+- dense embedding vector
+- extracted lexical term set used for BM25 and overlap logic
 
 This is an in-memory store, not a persistent vector database.
 
@@ -534,14 +584,20 @@ When the user picks a file:
 
 - images are previewed locally and only sent when the user submits
 - documents are previewed and also sent immediately to `/api/ingest` so indexing can begin in the background
+- the composer temporarily shows an `indexing...` badge while the initial `/api/ingest` HTTP request is in flight
+- removing a selected document from the composer clears local UI state only; it does not cancel a background ingest that has already started on the backend
 
 ### 12.4 Send behavior
 
 When the user presses Send:
 
+- the frontend first adds optimistic user-side messages to the chat UI before the network request resolves
 - if there is a selected file, the frontend sends multipart data to `/api/upload`
 - if there is only text, the frontend sends multipart data to `/api/chat`
+- non-image files are added optimistically to the frontend `uploadedFiles` list on submit if they are not already present
 - assistant responses are rendered with `react-markdown`
+
+One important detail: the sidebar's uploaded-file list is refreshed from `/api/history` or from successful `/api/upload` handling. The `/api/ingest` response alone does not update that sidebar immediately.
 
 ### 12.5 UI behavior
 
@@ -573,6 +629,7 @@ State exists in three important places.
 ### 13.3 Document state
 
 - uploaded chunks, embeddings, BM25 cache, and file lists are stored in memory inside `UploadedDocumentStore`
+- per-file ingestion status is tracked separately by `IngestionTracker` as `PENDING`, `DONE`, or `ERROR`
 
 ### 13.4 Session store note
 
@@ -662,6 +719,8 @@ These are important if you want to extend or productionize the project.
 - Restarting the backend clears both conversation history and indexed documents.
 - There is no authentication, authorization, or multi-user persistence layer yet.
 - The frontend is a single-page app without client-side route segmentation.
+- Removing a selected document in the composer does not undo a background ingest that already started.
+- The frontend `indexing...` badge reflects the `/api/ingest` request round-trip, not the full duration of the backend indexing job.
 - Uploaded image OCR depends on a Windows-specific hardcoded Tesseract path.
 - `WorkflowManager.db_path` is present but the active retrieval path does not persist vectors there.
 - `enable_lightweight_rerank` is configured but not currently used by the retrieval implementation.
